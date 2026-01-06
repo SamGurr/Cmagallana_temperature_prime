@@ -1,0 +1,99 @@
+---
+title: "Target_samples"
+author: "Samuel Gurr"
+date: "2025-12-02"
+output: html_document
+---
+
+### SET UP
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# SET WORKING DIRECTORY 
+knitr::opts_knit$set(root.dir = "C:/Users/gurrs/Documents/Github_repositories/Cgigas_temperature_prime/RAnalysis") # Sam's work
+```
+
+### LOAD PACKAGES
+```{r, echo=FALSE}
+library(tidyverse)
+```
+
+### load data
+
+```{r load sample spreadsheet and metadata, echo=FALSE}
+
+# load the raw data, just the counts of dead individuals each day
+metadata <- read.csv("Data/experiment_metadata.csv", header = T, sep =',') 
+samples  <- read.csv("Data/sample_spreadsheet.csv", header = T, sep =',') 
+
+baseline_samples <- samples %>% dplyr::filter(Timepoint %in% 'baseline') 
+
+```
+
+
+```{r merge}
+samples_metadata <- merge(metadata, 
+                          (samples %>% dplyr::filter(!Timepoint %in% 'baseline')), 
+                          by = 'Tank_number')
+
+nrow(samples_metadata) == (nrow(samples) - nrow(baseline_samples))
+View(samples)
+
+samples_metadata %>% dplyr::group_by(Timepoint, Purpose) %>% 
+                     summarise(n = n()) 
+```
+* summary table of baseline samples
+
+  - what are these?  Our expeirment includeded 10 mixed families. Before we pooled families to each replicate tank, we sampled the families 
+  and snap froze whole tissues in LN2 (4 per family, N = 40) and fixed in DNA and RNA sheilf (3 per family, N = 30)
+```{r baseline samples}
+
+# number of samples per family in LN2, N = 4
+baseline_samples %>% 
+                   dplyr::filter(Fixative %in% 'LN2') %>% 
+                   dplyr::group_by(Family_ID) %>% 
+                   dplyr::summarise(n=n()) 
+
+# number of samples per family in DNA RNMA shield, N = 3
+baseline_samples %>% 
+                   dplyr::filter(!Fixative %in% 'LN2') %>% 
+                   dplyr::group_by(Family_ID) %>% 
+                   dplyr::summarise(n=n())
+```
+
+
+```{r}
+
+samples_metadata.all <- samples_metadata %>% 
+                                         dplyr::select('Tube.ID','Purpose','Fixative',
+                                                       'Tank_number','Prime_treatment','Timepoint') %>% 
+                                         dplyr::filter(Timepoint %in% c('post-prime',
+                                                                        '1 week recovery, post challenge'
+                                                                        ))
+
+
+samples.metadata.LN2 <- samples_metadata.all %>% filter(Fixative %in% 'LN2')
+
+samples.metadata.LN2 %>% 
+                   dplyr::group_by(Prime_treatment, Timepoint,Tank_number) %>% 
+                   dplyr::summarise(n=n()) %>% 
+                   dplyr::arrange(Timepoint)
+
+DNARNA.samples.metadata <- All_samples.metadata %>% filter(!Fixative %in% 'LN2')
+
+
+```
+
+```{r}
+
+
+```
+
+```{r}
+
+
+```
+
+```{r}
+
+
+```
