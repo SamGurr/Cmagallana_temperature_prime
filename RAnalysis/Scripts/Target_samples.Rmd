@@ -35,6 +35,7 @@ samples_metadata <- merge(metadata,
                           (samples %>% dplyr::filter(!Timepoint %in% 'baseline')), 
                           by = 'Tank_number')
 
+
 nrow(samples_metadata) == (nrow(samples) - nrow(baseline_samples))
 View(samples)
 
@@ -67,7 +68,8 @@ samples_metadata.all <- samples_metadata %>%
                                          dplyr::select('Tube.ID','Purpose','Fixative',
                                                        'Tank_number','Prime_treatment','Timepoint') %>% 
                                          dplyr::filter(Timepoint %in% c('post-prime',
-                                                                        '1 week recovery, post challenge'
+                                                                        '1 week recovery, post challenge',
+                                                                        '3 weeks recovery, post challenge'
                                                                         ))
 
 
@@ -83,9 +85,31 @@ DNARNA.samples.metadata <- All_samples.metadata %>% filter(!Fixative %in% 'LN2')
 
 ```
 
-```{r}
+### 16S with Julia Cui
 
+  * All LN2 samples at baseline (40)
+  * Post prime for control, 24 hr, and 72 hr
+  * post callenge for control, 24 hr, and 72 hr
+  
+NOTE: Julia will divide samples on LNE and keep the remaiing for tissue homogenate assays
+```{r 16S samples}
+baseline_samples.16S <- baseline_samples %>% 
+                            dplyr::filter(Fixative %in% "LN2") %>% 
+                            dplyr::mutate(Prime_treatment = NA) %>% 
+                            dplyr::select(Tube.ID, Family_ID, Timepoint, Prime_treatment, Tank_number, Fixative)
+samples.16S <- samples.metadata.LN2 %>% 
+                  dplyr::filter(!Prime_treatment %in% "6_hours") %>% 
+                  dplyr::arrange(Tube.ID) %>% 
+                  dplyr::select(!Purpose) %>% 
+                  dplyr::mutate(Family_ID = NA) %>% 
+                  dplyr::select(Tube.ID, Family_ID, Timepoint, Prime_treatment, Tank_number, Fixative)
 
+all.16s <- rbind(baseline_samples.16S, samples.16S)
+
+write.csv(all.16s, "Data/Sequencing/16S_samples.csv")
+Rmisc::summarySE(all.16s, Timepoint)
+View(all.16s)
+8009556288
 ```
 
 ```{r}
