@@ -11,7 +11,7 @@ output:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 # SET WORKING DIRECTORY 
-knitr::opts_knit$set(root.dir = "C:/Users/gurrs/Documents/Github_repositories/Cgigas_temperature_prime/RAnalysis") # Sam's work
+knitr::opts_knit$set(root.dir = "C:/Users/gurrs/Documents/Github_repositories/Cgigas_temperature_prime/RAnalysis/") # Sam's work
 ```
 
 ### LOAD PACKAGES
@@ -39,15 +39,15 @@ library(gtsummary) # tbl_survfit
 ```{r load test data, echo=FALSE}
 
 # load the raw data, just the counts of dead individuals each day
-df_raw       <- read.csv("Data/Survival/survival.csv", header = T) 
+df_raw       <- read.csv("../Data/Survival/survival.csv", header = T) 
 df_raw[df_raw == "all"] <- 0 # do this if all individuals are dead in any cells
 df_raw       <- df_raw %>% na.omit() %>% mutate_at(2:ncol(df_raw), ~as.numeric(as.character(.))) 
 
 # load the stocking density data
-df_stocking  <- read.csv("Data/Survival/stocking_density.csv", header = T) 
+df_stocking  <- read.csv("../Data/Survival/stocking_density.csv", header = T) 
 
 # experiment metadata
-df_metadata  <- read.csv("Data/experiment_metadata.csv", header = T) 
+df_metadata  <- read.csv("../Data/experiment_metadata.csv", header = T) 
 
 ```
 
@@ -243,6 +243,9 @@ for(r in 1:nrow(df_surv_3wk))  { # for each row
 
 ### Test data, plot as barplots mean +- SE for each run
  
+#### 1 week recovery pre challenge 
+  
+* summary stats
 ```{r 1 week test data summary stats}
 
 df_1week_complete <- merge(df_out_1wk, df_metadata, by = 'Tank_number')
@@ -258,9 +261,22 @@ SummaryStats <- summarySE(df_1week_complete, measurevar="Percent_Survival", grou
                                               Date %in% 20251012 ~ 2,
                                               Date %in% 20251013 ~ 3,
                                               Date %in% 20251014 ~ 4,
-                                              Date %in% 20251015 ~ 5))
+                                              Date %in% 20251015 ~ 5)) %>% 
+                    dplyr::mutate(Percent_Survival = 
+                                    case_when(Percent_Survival < 0 ~ 0,
+                                              TRUE ~ Percent_Survival),
+                                  se = 
+                                    case_when(Percent_Survival < 0 ~ 0,
+                                              TRUE ~ se),
+                                  sd = 
+                                    case_when(Percent_Survival < 0 ~ 0,
+                                              TRUE ~ sd))
 
 
+```
+
+* survival plot
+```{r 1 week plot survival mean SE}
 # plot relative to stocking density aas embryos 
 
 
@@ -284,13 +300,18 @@ PlotMeanSE
 
 
 # output the data !!
-
-write.csv(SummaryStats,"Output/survival_1weekrecovery_MeanSE.csv")
+write.csv(SummaryStats,"../Output/survival_1weekrecovery_MeanSE.csv")
 
 pdf("Output/survival_1weekrecovery_MeanSE.pdf", width=10, height=5)
 print(PlotMeanSE)
 dev.off()
 
+
+```
+
+* hormetic curve plots
+  - each day post challenge
+```{r 1 week hometic curve plot total and daily post challenge}
 hormetic_curve <-  ggplot(SummaryStats %>% dplyr::filter(Date %in% 20251013), 
                           aes(x=as.numeric(gsub('_.*','',Prime_treatment)), y=Percent_Survival)) + 
                           geom_smooth(method = "loess") +
@@ -347,6 +368,7 @@ Day2_hormetic_curve_MeanSE <-  ggplot(SummaryStats %>% dplyr::filter(Date %in% 2
                                           panel.background = element_blank(), 
                                           axis.line = element_line(colour = "black"))
 
+
 control_yint_day3          <- (SummaryStats %>% dplyr::filter(c(Date %in% 20251013 & Prime_treatment %in% '0_hours')))$Percent_Survival
 Day3_hormetic_curve_MeanSE <-  ggplot(SummaryStats %>% dplyr::filter(Date %in% 20251013), 
                               aes(x=as.numeric(gsub('_.*','',Prime_treatment)), y=Percent_Survival)) + 
@@ -365,6 +387,7 @@ Day3_hormetic_curve_MeanSE <-  ggplot(SummaryStats %>% dplyr::filter(Date %in% 2
                                           panel.grid.minor = element_blank(), 
                                           panel.background = element_blank(), 
                                           axis.line = element_line(colour = "black"))
+
 
 control_yint_day4          <- (SummaryStats %>% dplyr::filter(c(Date %in% 20251014 & Prime_treatment %in% '0_hours')))$Percent_Survival
 Day4_hormetic_curve_MeanSE <-  ggplot(SummaryStats %>% dplyr::filter(Date %in% 20251014), 
@@ -386,6 +409,9 @@ Day4_hormetic_curve_MeanSE <-  ggplot(SummaryStats %>% dplyr::filter(Date %in% 2
                                           panel.background = element_blank(), 
                                           axis.line = element_line(colour = "black"))
 
+
+
+
 hormetic_curve_MeanSE <- ggpubr::ggarrange(Day2_hormetic_curve_MeanSE,
                                             Day3_hormetic_curve_MeanSE,
                                             Day4_hormetic_curve_MeanSE,
@@ -399,6 +425,141 @@ hormetic_curve_MeanSE <- ggpubr::ggarrange(Day2_hormetic_curve_MeanSE,
 pdf("Output/survival_1weekrecovery_hormesis.pdf", width=8, height=5)
 print(hormetic_curve_MeanSE)
 dev.off()
+```
+
+* 1 week receovery statistics
+```{r hormetic surve statistics}
+
+# omit 6 hours to focus on 24 and 72 vs control
+df_1week_complete_OMIT <- df_1week_complete %>%  filter(!Prime_treatment %in% c('0_hours','6_hours'))
+
+# 1 day post challenge  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+ANOVA_day1 <- aov(
+                  lm(Percent_Survival ~ Prime_treatment, data = (df_1week_complete %>% dplyr::filter(Date %in% 20251011)) )
+                 )
+shapiro.test(resid(ANOVA_day1)) # 0.09153
+leveneTest(ANOVA_day1) # 0.5948
+summary(ANOVA_day1) # NS 0.594
+BINOM_day1 <- glm((Percent_Survival/100) ~ Prime_treatment, data = (df_1week_complete %>% dplyr::filter(Date %in% 20251011)), family = binomial)
+summary(BINOM_day1)
+#                          Estimate Std. Error z value Pr(>|z|)
+# (Intercept)                 4.615      5.860   0.788    0.431
+# Prime_treatment6_hours     -1.139      6.767  -0.168    0.866
+# Prime_treatment24_hours    -1.533      6.503  -0.236    0.814
+# Prime_treatment72_hours    16.951  16877.357   0.001    0.999
+
+
+ANOVA_day1_OM <- aov(
+                  lm(Percent_Survival ~ Prime_treatment, data = (df_1week_complete_OMIT %>% dplyr::filter(Date %in% 20251011)) )
+                 )
+shapiro.test(resid(ANOVA_day1_OM)) # 0.0582
+leveneTest(ANOVA_day1_OM) # 0.4971
+summary(ANOVA_day1_OM) # NS 0.497
+BINOM_day1_OM <- glm((Percent_Survival/100) ~ Prime_treatment, data = (df_1week_complete_OMIT %>% dplyr::filter(Date %in% 20251011)), family = binomial)
+summary(BINOM_day1_OM)
+#                          Estimate Std. Error z value Pr(>|z|)
+# (Intercept)                 4.615      5.860   0.788    0.431
+# Prime_treatment24_hours    -1.533      6.503  -0.236    0.814
+# Prime_treatment72_hours    16.951  16877.357   0.001    0.999
+
+
+
+# 2 days post challenge  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+ANOVA_day2 <- aov(
+                  lm(Percent_Survival ~ Prime_treatment, data = (df_1week_complete %>% 
+                                                                   dplyr::filter(Date %in% 20251012))
+                 ) )
+shapiro.test(resid(ANOVA_day2)) # 0.2183
+leveneTest(ANOVA_day2) # 0.7549
+summary(ANOVA_day2) # NS 0.0671 .
+BINOM_day2 <- glm((Percent_Survival/100) ~ Prime_treatment, data = (df_1week_complete %>% dplyr::filter(Date %in% 20251012)), family = binomial)
+summary(BINOM_day2)
+#                         Estimate Std. Error z value Pr(>|z|)
+# (Intercept)               0.1572     1.1583   0.136    0.892
+# Prime_treatment6_hours   -0.2744     1.6369  -0.168    0.867
+# Prime_treatment24_hours  -0.9681     1.7048  -0.568    0.570
+# Prime_treatment72_hours   0.4257     1.6708   0.255    0.799
+
+
+ANOVA_day2_OM <- aov(
+                  lm(Percent_Survival ~ Prime_treatment, data = (df_1week_complete_OMIT %>% 
+                                                                   dplyr::filter(Date %in% 20251012))
+                 ) )
+shapiro.test(resid(ANOVA_day2_OM)) # 0.3713
+leveneTest(ANOVA_day2_OM) # 0.6862
+summary(ANOVA_day2_OM) # NS 0.0671 .
+BINOM_day2_OM <- glm((Percent_Survival/100) ~ Prime_treatment, data = (df_1week_complete_OMIT %>% dplyr::filter(Date %in% 20251012)), family = binomial)
+summary(BINOM_day2_OM)
+#                         Estimate Std. Error z value Pr(>|z|)
+# (Intercept)               0.1572     1.1583   0.136    0.892
+# Prime_treatment24_hours  -0.9681     1.7048  -0.568    0.570
+# Prime_treatment72_hours   0.4257     1.6708   0.255    0.799
+
+
+# 3 days post challenge :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+ANOVA_day3<- aov(
+                  lm(Percent_Survival ~ Prime_treatment, data = (df_1week_complete %>% 
+                                                                   dplyr::filter(Date %in% 20251013)))
+                 )
+shapiro.test(resid(ANOVA_day3)) # 0.08861
+leveneTest(ANOVA_day3) # 0.8307
+summary(ANOVA_day3) # NS
+BINOM_day3 <- glm((Percent_Survival/100) ~ Prime_treatment, data = (df_1week_complete %>% dplyr::filter(Date %in% 20251013)), family = binomial)
+summary(BINOM_day3)
+#                         Estimate Std. Error z value Pr(>|z|)
+# (Intercept)             -1.41099    1.45418  -0.970    0.332
+# Prime_treatment6_hours   0.06873    2.03575   0.034    0.973
+# Prime_treatment24_hours -0.48641    2.24814  -0.216    0.829
+# Prime_treatment72_hours  0.54688    1.92685   0.284    0.777
+
+ANOVA_day3_OM <- aov(
+                  lm(Percent_Survival ~ Prime_treatment, data = (df_1week_complete_OMIT %>% 
+                                                                   dplyr::filter(Date %in% 20251013)))
+                 )
+shapiro.test(resid(ANOVA_day3_OM)) # 0.2023
+leveneTest(ANOVA_day3_OM) # 0.6827
+summary(ANOVA_day3_OM) # 0.108
+BINOM_day3 <- glm((Percent_Survival/100) ~ Prime_treatment, data = (df_1week_complete_OMIT %>% dplyr::filter(Date %in% 20251013)), family = binomial)
+summary(BINOM_day3)
+#                         Estimate Std. Error z value Pr(>|z|)
+# (Intercept)             -1.41099    1.45418  -0.970    0.332
+# Prime_treatment6_hours   0.06873    2.03575   0.034    0.973
+# Prime_treatment24_hours -0.48641    2.24814  -0.216    0.829
+# Prime_treatment72_hours  0.54688    1.92685   0.284    0.777
+
+
+
+# 4 days post challenge  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+ANOVA_day4<- aov(
+                  lm(Percent_Survival ~ Prime_treatment, data = (df_1week_complete %>% 
+                                                                   dplyr::filter(Date %in% 20251014)))
+                 )
+shapiro.test(resid(ANOVA_day4)) # 0.09939
+leveneTest(ANOVA_day4) # 0.6327
+summary(ANOVA_day4) # 0.0947 .
+BINOM_day4 <- glm((Percent_Survival/100) ~ Prime_treatment, data = (df_1week_complete %>% dplyr::filter(Date %in% 20251014)), family = binomial)
+summary(BINOM_day4)
+#                           Estimate Std. Error z value Pr(>|z|)
+# (Intercept)                -3.9120     4.1641  -0.939    0.347
+# Prime_treatment6_hours    -18.6540 27826.0561  -0.001    0.999
+# Prime_treatment24_hours     0.6856     5.1397   0.133    0.894
+# Prime_treatment72_hours     1.4097     4.7015   0.300    0.764
+
+ANOVA_day4_OM <- aov(
+                  lm(Percent_Survival ~ Prime_treatment, data = (df_1week_complete_OMIT %>% 
+                                                                   dplyr::filter(Date %in% 20251014)))
+                 )
+shapiro.test(resid(ANOVA_day4_OM)) # 0.03605
+summary(ANOVA_day4_OM)
+KM_day4_OM <- kruskal.test(Percent_Survival ~ Prime_treatment, data = (df_1week_complete_OMIT %>% 
+                                                                   dplyr::filter(Date %in% 20251014)))
+KM_day4_OM # 0.3029
+BINOM_day4 <- glm((Percent_Survival/100) ~ Prime_treatment, data = (df_1week_complete_OMIT %>% dplyr::filter(Date %in% 20251014)), family = binomial)
+summary(BINOM_day4)
+#                         Estimate Std. Error z value Pr(>|z|)
+# (Intercept)              -3.9120     4.1638  -0.940    0.347
+# Prime_treatment24_hours   0.6856     5.1394   0.133    0.894
+# Prime_treatment72_hours   1.4097     4.7012   0.300    0.764
 ```
 
 ```{r 3 weeks test data summary stats}
@@ -637,14 +798,14 @@ for (i in 1:nrow(df_KM_1wk)) {
    #count_dead  <- round(df_Exp2[i,]$Count_dead/100)  # divide all counts by 1000, round to nearest
    
    count_alive <- round(df_KM_1wk[i,]$Count_Alive) # raw counts
-   count_dead  <- round(df_KM_1wk[i,]$Daily_Count_Dead)  # raw counts
+   count_dead  <- round(df_KM_1wk[i,]$Count_Dead)  # raw counts
    
    loopDF           <- data.frame(matrix(0,ncol = 4, nrow = (count_alive + count_dead))) 
    colnames(loopDF) <- (c('Date','Treatment','Tank_number','Count_dead'))
    loopDF           <- loopDF %>% 
                             dplyr::mutate(
                               Treatment   = df_KM_1wk[i,]$Prime_treatment,
-                              Tank_number = df_KM_1wk[i,]$Tank_number,
+                              #Tank_number = df_KM_1wk[i,]$Tank_number,
                               Date        = df_KM_1wk[i,]$Date)
   loopDF[c(1:count_dead),4] = 1 # 1 for dead 
   loopDF[c((count_dead + 1):nrow(loopDF)),4] = 0 # 0 for alive
@@ -667,6 +828,32 @@ days_since_earliest <- as.numeric(dates_asDate - earliest)
 
 # 
 df_binary_1wk$Days <- as.numeric(days_since_earliest)
+
+
+
+Count_tally <- df_binary_1wk %>% 
+                  dplyr::group_by(Days, Treatment, Tank_number)  %>%
+                  dplyr::summarise(
+                      n_0 = sum(Count_dead == 0, na.rm = TRUE),
+                      n_1 = sum(Count_dead == 1, na.rm = TRUE),
+                      n_total = n(),
+                      .groups = "drop"
+                    ) 
+View(MeanSE_Count_alive)
+MeanSE_Count_alive <- Rmisc::summarySE(data = df_KM_1wk, 
+                                       measurevar = 'Count_Alive', 
+                                       groupvars = c('Date', 'Treatment', 'Prime_treatment')) %>% dplyr::select(!c(sd, se, ci)) 
+MeanSE_Count_dead  <- Rmisc::summarySE(data = df_KM_1wk, 
+                                       measurevar = 'Count_Dead', 
+                                       groupvars = c('Date', 'Treatment', 'Prime_treatment')) %>% dplyr::select(!c(sd, se, ci)) 
+
+Mean_count_alive_dead <- merge(MeanSE_Count_alive, MeanSE_Count_dead)
+
+
+
+
+sum(Count_dead$n_total)
+nrows)
 ```
 
 
@@ -720,6 +907,11 @@ df_binary_3weeks$Days <- as.numeric(days_since_earliest)
 
 surv_all <- survfit2(Surv(Days, Count_dead) ~ Treatment, data = df_binary)
 
+surv_1wk <- survfit2(Surv(Days, Count_dead) ~ Treatment, data = (df_binary_1wk %>% 
+                                                                   dplyr::filter(!Days>4) %>% 
+                                                                   dplyr::filter(Treatment %in% c('0_hours',
+                                                                                                  '24_hours', 
+                                                                                                  '72_hours'))))
 
 surv_3wks <- survfit2(Surv(Days, Count_dead) ~ Treatment, data = df_binary_3weeks)
 
@@ -728,8 +920,33 @@ surv_3wks <- survfit2(Surv(Days, Count_dead) ~ Treatment, data = df_binary_3week
 ### Test data, plot Kapla Meier
 
 ```{r 1 week plot Kaplan Meier}
+?ggsurvplot
+km_fit <- survfit2(Surv(Days, Count_dead) ~ Treatment, data = (df_binary_1wk %>% dplyr::filter(!Days>4)))
 
-KaplanMeier.plot <- surv_all %>% 
+
+ggsurvplot(
+  km_fit,
+  data = (df_binary_1wk %>% dplyr::filter(!Days>4)),
+  risk.table = TRUE,
+  pval = TRUE,
+  conf.int = TRUE
+)
+
+
+
+
+ggsurvplot(
+  km_fit,
+  data = (df_binary_1wk %>% dplyr::filter(!Days>4)),
+  risk.table = TRUE,
+  conf.int = TRUE,
+  xlab = "Time",
+  ylab = "Survival probability",
+  surv.median.line = "hv"
+)
+
+
+KaplanMeier.plot <- surv_1wk %>% 
                         ggsurvfit(linetype_aes = F, linewidth = 1,type ="survival") +
                         scale_color_manual(values = c("darkgreen","orange","darkorange2","darkred")) +
                         scale_fill_manual(values = c("darkgreen","orange","darkorange2","darkred")) +
@@ -740,8 +957,8 @@ KaplanMeier.plot <- surv_all %>%
                         add_confidence_interval() +
                         # add_risktable() +
                         # add_risktable_strata_symbol() + # (symbol = "\U25CF", size = 10
-                        scale_ggsurvfit(x_scales = list(breaks = 0:10)) #+
-                       # add_pvalue(location  = "annotation", x = 8.5)
+                        scale_ggsurvfit(x_scales = list(breaks = 0:10)) +
+                        add_pvalue(location  = "annotation", x = 3.5)
 
 
 KM_hormetic_curves <- ggpubr::ggarrange(KaplanMeier.plot,
@@ -760,6 +977,19 @@ dev.off()
 pdf("Output/survival_1weekrecovery_hormesis.pdf", width=8, height=5)
 print(hormetic_curve_MeanSE)
 dev.off()
+
+
+fit <- coxph(Surv(Days, Count_dead) ~ Treatment, data =  (df_binary_1wk %>% dplyr::filter(!Days>4)))
+summary(fit)
+hr <- broom::tidy(fit, exponentiate = TRUE, conf.int = TRUE)
+
+ggplot(hr, aes(x = estimate, y = term)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+  geom_vline(xintercept = 1, linetype = 2) +
+  scale_x_log10() +
+  theme_classic() +
+  labs(x = "Hazard ratio", y = NULL)
 
 ```
 

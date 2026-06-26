@@ -12,9 +12,9 @@ and varied duration of exposure to track subseqent response to a *pessimum* cond
 
 Our efforts will link *in vivo* physiology, transciption, and epigenetic markers to characterize temperature priming.
 
-## PIs: 
+## Team: 
 - Samuel Gurr (contact samuel.gurr@oregonstate.edu)
 - Louis Plough 
-
+- Julia Cui
 
 

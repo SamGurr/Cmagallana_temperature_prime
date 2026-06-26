@@ -22,8 +22,8 @@ library(tidyverse)
 ```{r load sample spreadsheet and metadata, echo=FALSE}
 
 # load the raw data, just the counts of dead individuals each day
-metadata <- read.csv("Data/experiment_metadata.csv", header = T, sep =',') 
-samples  <- read.csv("Data/sample_spreadsheet.csv", header = T, sep =',') 
+metadata <- read.csv("../Data/experiment_metadata.csv", header = T, sep =',') 
+samples  <- read.csv("../Data/sample_spreadsheet.csv", header = T, sep =',') 
 
 baseline_samples <- samples %>% dplyr::filter(Timepoint %in% 'baseline') 
 
@@ -37,7 +37,7 @@ samples_metadata <- merge(metadata,
 
 
 nrow(samples_metadata) == (nrow(samples) - nrow(baseline_samples))
-View(samples)
+# View(samples)
 
 samples_metadata %>% dplyr::group_by(Timepoint, Purpose) %>% 
                      summarise(n = n()) 
@@ -80,7 +80,7 @@ samples.metadata.LN2 %>%
                    dplyr::summarise(n=n()) %>% 
                    dplyr::arrange(Timepoint)
 
-DNARNA.samples.metadata <- All_samples.metadata %>% filter(!Fixative %in% 'LN2')
+DNARNA.samples.metadata <- samples_metadata.all %>% filter(!Fixative %in% 'LN2')
 
 
 ```
@@ -106,14 +106,30 @@ samples.16S <- samples.metadata.LN2 %>%
 
 all.16s <- rbind(baseline_samples.16S, samples.16S)
 
-write.csv(all.16s, "Data/Sequencing/16S_samples.csv")
+write.csv(all.16s, "../Data/Sequencing/16S_samples.csv")
 Rmisc::summarySE(all.16s, Timepoint)
 View(all.16s)
 8009556288
 ```
 
-```{r}
 
+### TagSeq with SeqMatic 
+* extra lane space overlapped with the NOAA Sea scallop samples
+
+```{r}
+# objective, target 50 total samples. 
+# omit the 3 samples post prime for each of the prime treatments that were used for the 24 hour challenge. 
+# tanks 6, 9, and 20 for the  0 hour  prime treatment at timepoint post prime ( N = 3)
+# tanks 19, 25, and 30 for the 24 hours prime treatment at timepoint post prime  ( N = 3)
+# tanks 18, 24, 27 for the 72 hour prime treatmnet at timepoint post prime   ( N = 3)
+
+TagSeq_samples <- DNARNA.samples.metadata %>% 
+                  dplyr::filter(!Prime_treatment %in% "6_hours") 
+
+
+TagSeq_samples %>% 
+  dplyr::group_by(Prime_treatment, Timepoint, Tank_number) %>% 
+  dplyr::summarise(n = n())
 
 ```
 
