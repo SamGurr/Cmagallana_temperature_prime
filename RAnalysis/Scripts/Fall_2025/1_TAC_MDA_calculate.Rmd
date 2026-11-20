@@ -1,0 +1,498 @@
+---
+title: "MDA_TAC_analysis"
+author: "Samuel Gurr"
+date: "2026-09-04"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# SET WORKING DIRECTORY 
+knitr::opts_knit$set(root.dir = "C:/Users/gurrs/Documents/6_Github_repositories/SamGurr/Cgigas_temperature_prime/RAnalysis") # Sam's
+# knitr::opts_knit$set(root.dir = "C:/ < Anna add here > /Predictive_phenomics/RAnalysis") # Anna's root dir on her computer
+```
+
+
+```{r load libraries}
+library(readxl)
+library(stringr)
+library(pracma)
+library(ggplot2)
+library(ggpubr)
+```
+
+```{r load metadata}
+
+# metadata
+experiment_metadata <- read.csv("Data/Fall_2025/experiment_metadata.csv", sep=',')
+sample_spreadsheet  <- read.csv("Data/Fall_2025/Sample_spreadsheet.csv", sep=',') %>% dplyr::rename(Oyster_ID = Tube.ID)
+assays_metadata     <- read_excel("Data/Fall_2025/Assays/Assay_metadata.xlsx") %>% dplyr::rename(filename = File_name)
+
+```
+
+
+```{r load data}
+
+# ATP assay
+MDA_plate1.filepath <- "Data/Fall_2025/Assays/OxiSelect TBARS MDA_CellBioLabs_20260828_184945.xlsx"
+MDA_plate1.raw      <- read_excel("Data/Fall_2025/Assays/OxiSelect TBARS MDA_CellBioLabs_20260828_184945.xlsx")
+
+TAC_plate1.filepath <- "Data/Fall_2025/Assays/OxiSelect Total Antioxidant Capacity_CellBioLabs_20260827_161606_Before.xlsx"
+TAC_plate1.raw <- read_excel("Data/Fall_2025/Assays/OxiSelect Total Antioxidant Capacity_CellBioLabs_20260827_161606_Before.xlsx")
+
+TAC_plate2.filepath <- "Data/Fall_2025/Assays/OxiSelect Total Antioxidant Capacity_CellBioLabs_20260827_165038_After.xlsx"
+TAC_plate2.raw <- read_excel("Data/Fall_2025/Assays/OxiSelect Total Antioxidant Capacity_CellBioLabs_20260827_165038_After.xlsx")
+
+# total protein for ATP
+BCA_plate.filepath <- "Data/Fall_2025/Assays/Pierce BCA Total Protein_MDA_TCA_ThermoScientific_090226.xlsx"
+BCA_plate.raw <- read_excel("Data/Fall_2025/Assays/Pierce BCA Total Protein_MDA_TCA_ThermoScientific_090226.xlsx")
+
+```
+
+
+```{r function to convert raw to dataframe}
+
+
+covert_raw_df <- function (filepath_in) {
+  
+                          x        <- (basename(filepath_in))
+                          x.2      <- sub("\\.xlsx$", "", noquote(x))
+                          df       <- read_excel(filepath_in)
+                          file_out <- as.data.frame(df[-c(1:32,41:43),])# drop first columns and first 26 rows
+                          colnames(file_out) <- c("Plate_row", 1,2,3,4,5,6,7,8,9,10,11,12)
+                          
+                          # x.time <- as.numeric(gsub(".*_(\\d+)\\.xlsx$", "\\1", x))
+                          file_out <- file_out %>%  
+                              tidyr::pivot_longer(
+                                cols = -Plate_row,
+                                names_to = "Plate_col",
+                                values_to = "OD_570nm"
+                              ) %>% 
+                            dplyr::mutate(filename = as.character(x.2)) %>% 
+                            dplyr::mutate(Well = paste0(Plate_row,Plate_col) #,
+                                          # time= as.POSIXlt(strptime(sprintf("%06d", x.time), format = "%m%d%y"), format ="%m/%d/%Y")
+                                          )
+                          
+                          return(file_out)
+}
+
+
+
+covert_rawMDA_df <- function (filepath_in) {
+  
+                          x        <- (basename(filepath_in))
+                          x.2      <- sub("\\.xlsx$", "", noquote(x))
+                          df       <- read_excel(filepath_in)
+                          file_out <- as.data.frame(df[-c(1:43,52:55),])# drop first columns and first 26 rows
+                          colnames(file_out) <- c("Plate_row", 1,2,3,4,5,6,7,8,9,10,11,12)
+                          
+                          # x.time <- as.numeric(gsub(".*_(\\d+)\\.xlsx$", "\\1", x))
+                          file_out <- file_out %>%  
+                              tidyr::pivot_longer(
+                                cols = -Plate_row,
+                                names_to = "Plate_col",
+                                values_to = "OD_570nm"
+                              ) %>% 
+                            dplyr::mutate(filename = as.character(x.2)) %>% 
+                            dplyr::mutate(Well = paste0(Plate_row,Plate_col) #,
+                                          # time= as.POSIXlt(strptime(sprintf("%06d", x.time), format = "%m%d%y"), format ="%m/%d/%Y")
+                                          )
+                          
+                          return(file_out)
+}
+
+
+```
+
+
+```{r convert raw to dataframe}
+
+MDA_plate1.df <- covert_rawMDA_df(MDA_plate1.filepath) %>% 
+                    dplyr::mutate(Assay = "MDA", plate = "plate1") %>% 
+                    dplyr::rename(OD_540nm = OD_570nm)
+
+TAC_plate1.df <- covert_raw_df(TAC_plate1.filepath) %>% 
+                    dplyr::mutate(Assay = "TAC", plate = "Before") %>% 
+                    dplyr::rename(OD_490nm = OD_570nm)
+
+TAC_plate2.df <- covert_raw_df(TAC_plate2.filepath) %>% 
+                    dplyr::mutate(Assay = "TAC", plate = "After") %>% 
+                    dplyr::rename(OD_490nm = OD_570nm)
+
+BCA_plate.df  <- covert_raw_df(BCA_plate.filepath) %>% 
+                    dplyr::mutate(Assay = "BCA", plate = "plate1") %>% 
+                    dplyr::rename(OD_562nm = OD_570nm)
+
+```
+
+```{r merge with metadata}
+
+MDA_plate1_meta.df <- merge(assays_metadata, MDA_plate1.df, by = c("filename", "Well"))
+nrow(MDA_plate1_meta.df) == nrow(MDA_plate1.df %>% na.omit()) # TRUE
+
+
+# TAC_plate1_meta.df <- merge(assays_metadata, TAC_plate1.df, by = c("filename", "Well"))
+# nrow(TAC_plate1_meta.df) == nrow(TAC_plate1.df %>% na.omit()) # TRUE
+
+
+TAC_plate2_meta.df <- merge(assays_metadata, TAC_plate2.df, by = c("filename", "Well"))
+nrow(TAC_plate2_meta.df) == nrow(TAC_plate2.df %>% na.omit()) # TRUE
+
+BCA_plate_meta.df <- merge(assays_metadata, BCA_plate.df, by = c("filename", "Well"))
+nrow(BCA_plate_meta.df) == nrow(BCA_plate.df %>% na.omit()) # TRUE
+```
+
+
+```{r merge with sample treatment metadata}
+
+sample_spreadsheet_reduced <- sample_spreadsheet %>%  dplyr::select('Oyster_ID', 'Timepoint', 'Tank_number', 'Prime_treatment', 'Recovery_pre_challenge')
+
+
+TAC_plate2_meta_sample.df  <- merge(TAC_plate2_meta.df, sample_spreadsheet_reduced, by = "Oyster_ID")
+
+MDA_plate1_meta_sample.df  <- merge(MDA_plate1_meta.df, sample_spreadsheet_reduced, by = "Oyster_ID")
+
+BCA_plate_meta_sample.df   <- merge(BCA_plate_meta.df, sample_spreadsheet_reduced, by = "Oyster_ID")
+
+```
+
+
+```{r calibration curve BCA}
+
+BCA_standards <- BCA_plate_meta.df %>% dplyr::filter(Type %in% 'Standard') %>% dplyr::filter(!Concentration == 1000)
+BCA_standards$Concentration <- as.numeric(BCA_standards$Concentration)
+BCA_standards$OD_562nm <- as.numeric(BCA_standards$OD_562nm)
+
+meanBLANKS_BCA <- BCA_standards %>% dplyr::filter(Concentration == 0) %>% dplyr::summarise(mean = mean(OD_562nm))
+
+# zero the absorbnace of the zero standard, and substract the mean absorb from the remaining
+BCA_standards.cor <- BCA_standards %>% 
+                              dplyr::mutate(OD_562nm.cor = 
+                                              dplyr::case_when(Concentration == 0 ~ 0,
+                                                        Concentration != 0 ~ OD_562nm - meanBLANKS_BCA[1,1]))
+
+
+BCA_standardsPLOT <- ggplot(BCA_standards.cor, 
+                            aes(x = Concentration, y = OD_562nm.cor)) +
+  
+                          # Raw observations
+                          geom_point(alpha = 0.35) +
+                          
+                          # Mean +/- SE at each x value
+                          stat_summary(
+                            fun.data = mean_se,
+                            geom = "errorbar",
+                            width = 0.15,
+                            colour = "black"
+                          ) +
+                          stat_summary(
+                            fun = mean,
+                            geom = "point",
+                            size = 3,
+                            colour = "firebrick"
+                          ) +
+                          
+                          # Horizontal line through the overall mean
+                          stat_smooth(
+                            method = "lm",
+                            formula = y ~ x,
+                            se = FALSE
+                          ) +
+                          
+                          # Linear-model equation and R-squared
+                          ggpmisc::stat_poly_eq(
+                            formula = y ~ x,
+                            method = "lm",
+                            aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~~")),
+                            parse = TRUE,
+                            label.x.npc = "left",
+                            label.y.npc = "top"
+                          ) +
+                          
+                          theme_classic()
+
+pdf("Output/Fall_2025/assays/BCA_TAC_MDA_standards.pdf", width =5, height =5)
+plot(BCA_standardsPLOT)
+dev.off()
+```
+
+```{r calibration curve ATP}
+
+# PLATE 1
+TAC_standards <- TAC_plate2_meta.df %>% 
+                    dplyr::filter(Type %in% 'Standard') %>% 
+                    dplyr::filter(!Concentration == 1) %>% 
+                    dplyr::filter(!Notes %in% c("do not use", "slightly more volume"))
+TAC_standards$Concentration <- as.numeric(TAC_standards$Concentration)
+TAC_standards$OD_490nm      <- as.numeric(TAC_standards$OD_490nm)
+
+meanBLANKS_TAC <- TAC_standards %>% dplyr::filter(Concentration == 0) %>% dplyr::summarise(mean = mean(OD_490nm))
+
+# zero the absorbnace of the zero standard, and substract the mean absorb from the remaining
+TAC_standards.cor <- TAC_standards %>% 
+                              dplyr::mutate(OD_490nm.cor = 
+                                              dplyr::case_when(Concentration == 0 ~ 0,
+                                                        Concentration != 0 ~ OD_490nm - meanBLANKS_TAC[1,1]))
+
+TAC_standardsPLOT  <- ggplot(TAC_standards.cor , 
+                            aes(x = Concentration, y = OD_490nm.cor)) +
+  
+                          # Raw observations
+                          geom_point(alpha = 0.35) +
+                          
+                          # Mean +/- SE at each x value
+                          stat_summary(
+                            fun.data = mean_se,
+                            geom = "errorbar",
+                            width = 0.1,
+                            colour = "black"
+                          ) +
+                          stat_summary(
+                            fun = mean,
+                            geom = "point",
+                            size = 3,
+                            colour = "firebrick"
+                          ) +
+                          
+                          # Horizontal line through the overall mean
+                          stat_smooth(
+                            method = "lm",
+                            formula = y ~ x,
+                            se = FALSE
+                          ) +
+                          
+                          # Linear-model equation and R-squared
+                          ggpmisc::stat_poly_eq(
+                            formula = y ~ x,
+                            method = "lm",
+                            aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~~")),
+                            parse = TRUE,
+                            label.x.npc = "left",
+                            label.y.npc = "top"
+                          ) +
+  
+                          labs(title="TAC standards") +
+                          
+                          theme_classic()
+
+
+
+pdf("Output/Fall_2025/assays/TAC_standards.pdf", width =5, height =10)
+plot(TAC_standardsPLOT)
+dev.off()
+```
+
+```{r calibration curve MDA}
+
+# PLATE 1
+MDA_standards <- MDA_plate1_meta.df %>% 
+                    dplyr::filter(Type %in% 'Standard') 
+MDA_standards$Concentration <- as.numeric(MDA_standards$Concentration)
+MDA_standards$OD_540nm      <- as.numeric(MDA_standards$OD_540nm)
+
+meanBLANKS_MDA <- MDA_standards %>% dplyr::filter(Concentration == 0) %>% dplyr::summarise(mean = mean(OD_540nm))
+
+# zero the absorbnace of the zero standard, and substract the mean absorb from the remaining
+MDA_standards.cor <- MDA_standards %>% 
+                              dplyr::mutate(OD_540nm.cor = 
+                                              dplyr::case_when(Concentration == 0 ~ 0,
+                                                        Concentration != 0 ~ OD_540nm - meanBLANKS_MDA[1,1]))
+
+MDA_standardsPLOT  <- ggplot((MDA_standards.cor %>% dplyr::filter(!Concentration > 40)),# stnadards over 40 do not look right 
+                            aes(x = Concentration, y = OD_540nm.cor)) +
+  
+                          # Raw observations
+                          geom_point(alpha = 0.35) +
+                          
+                          # Mean +/- SE at each x value
+                          stat_summary(
+                            fun.data = mean_se,
+                            geom = "errorbar",
+                            width = 0.1,
+                            colour = "black"
+                          ) +
+                          stat_summary(
+                            fun = mean,
+                            geom = "point",
+                            size = 3,
+                            colour = "firebrick"
+                          ) +
+                          
+                          # Horizontal line through the overall mean
+                          stat_smooth(
+                            method = "lm",
+                            formula = y ~ x,
+                            se = FALSE
+                          ) +
+                          
+                          # Linear-model equation and R-squared
+                          ggpmisc::stat_poly_eq(
+                            formula = y ~ x,
+                            method = "lm",
+                            aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~~")),
+                            parse = TRUE,
+                            label.x.npc = "left",
+                            label.y.npc = "top"
+                          ) +
+  
+                          labs(title="MDA standards") +
+                          
+                          theme_classic()
+
+
+
+pdf("Output/Fall_2025/assays/MDA_standards.pdf", width =5, height =10)
+plot(MDA_standardsPLOT)
+dev.off()
+```
+
+
+# CALCULATIONS 
+
+## Calculate TOTAL PROTEIN in samples
+
+  * Subtract the mean blank absorbance from every reading
+  * Calculate the concentration of the diluted sample (Cdiluted) using the standard curve (y= mx + b)
+  * Coriginal = Cdiluted × DF
+  * Protein amount = Coriginal × Vsample
+
+```{r calculate total protein}
+
+# y = 0.00124x + 0.0504; y = OD_562nm; x = Concentration (ug / mL)
+
+BCA_plate_meta_sample.df$OD_562nm <- as.numeric(BCA_plate_meta_sample.df$OD_562nm)
+
+BCA_calculated <-  BCA_plate_meta_sample.df %>% 
+                      dplyr::mutate(DilutionFactor = dplyr::case_when(is.na(Notes) ~ 1,
+                                                                      !is.na(Notes) ~ 2.33),
+                                    OD_562nm.cor = as.numeric(OD_562nm) - meanBLANKS_BCA[1,1],
+                                    TotalProtein_ugmL = (((OD_562nm.cor - 0.0504) / 0.00124)  * as.numeric(DilutionFactor)),
+                                    TotalProtein_mgmL = (TotalProtein_ugmL/1000),
+                                    TotalProtein_mg   = TotalProtein_mgmL * (as.numeric(Volume_sample)/1000)
+                                    )
+
+
+BCA_calculatedMeans <- BCA_calculated %>% 
+                            dplyr::group_by(Oyster_ID) %>% 
+                            dplyr::summarise(
+                                    meanTotalProtein_mg = mean(TotalProtein_mg)
+                            )
+
+```
+
+## Calculate MDA in samples
+
+```{r corrected MDA}
+
+MDA_plate1_meta_sample.df$OD_540nm <- as.numeric(MDA_plate1_meta_sample.df$OD_540nm)
+MDA.cor <- MDA_plate1_meta_sample.df %>% 
+                              # dplyr::filter(!Type %in% NA) %>% # Anna has NAs coded in Type column for rows to skip %>% 
+                              dplyr::filter(Type %in% c('Sample', 'Duplicate')) %>% 
+                              dplyr::mutate(
+                                OD_540nm.cor = OD_540nm - meanBLANKS_MDA[1,1]
+                              )
+
+# plots to view the corrected values, are duplicates outliers?
+ggplot(MDA.cor, aes(x = Oyster_ID, y = OD_540nm.cor)) + geom_point()
+
+ggplot((MDA.cor %>% dplyr::filter(!Notes %in% 'not buffered')), aes(x = Oyster_ID, y = OD_540nm.cor)) + geom_point()
+```
+
+```{r calculate MDA}
+
+
+# plate 1
+# y = 643 + 232; y = OD_540nm; x = Concentration (nmol)MDA.cor.calc <- MDA.cor %>% 
+MDA.cor.calc <- MDA.cor  %>% 
+                            dplyr::mutate(
+                                uM_MDA = (OD_540nm.cor - 232) / 643
+                                )
+
+# merge with total protein 
+mM_MDA_permgTotalProtein <- merge(MDA.cor.calc,BCA_calculatedMeans, by = "Oyster_ID") %>% 
+                                  dplyr::mutate(uM_MDA_permgProtein = uM_MDA / meanTotalProtein_mg,
+                                                mM_MDA_permgProtein = uM_MDA_permgProtein/ 1000)
+
+
+
+# plot the two samples to view variation betwen duplicate samples 
+
+ggplot(mM_MDA_permgTotalProtein,
+        aes(x = Oyster_ID, 
+         y = mM_MDA_permgProtein)) + 
+  geom_point()
+
+# calculate means 
+mM_MDA_permgTotalProtein.Means <- mM_MDA_permgTotalProtein %>% 
+                               dplyr::group_by(Oyster_ID, Timepoint, Tank_number, Prime_treatment, Recovery_pre_challenge) %>% 
+                               dplyr::summarise(
+                                 mM_MDA_permgProtein.mean = mean(mM_MDA_permgProtein),
+                                 mM_MDA_permgProtein.n = dplyr::n(),
+                                 mM_MDA_permgProtein.sd = sd(mM_MDA_permgProtein),
+                                 mM_MDA_permgProtein.se = mM_MDA_permgProtein.sd/sqrt(mM_MDA_permgProtein.n)
+                               )
+
+write.csv(mM_MDA_permgTotalProtein, "Output/Fall_2025/assays/MDA_calculated_all.csv")
+write.csv(mM_MDA_permgTotalProtein.Means, "Output/Fall_2025/assays/MDA_calculated_means.csv")
+```
+
+## Calculate TAC in samples
+
+  * mM uric acid equivalents (UAE) using the standard curve
+  
+  * μM Copper Reducing Equivalents = multiply UAE by 2189 μM Cu++/ mM uric acid
+  
+  
+```{r corrected TAC}
+
+TAC_plate2_meta_sample.df$OD_490nm <- as.numeric(TAC_plate2_meta_sample.df$OD_490nm)
+TAC.cor <- TAC_plate2_meta_sample.df %>% 
+                              # dplyr::filter(!Type %in% NA) %>% # Anna has NAs coded in Type column for rows to skip %>% 
+                              dplyr::filter(Type %in% c('Sample', 'Duplicate')) %>% 
+                              dplyr::mutate(
+                                OD_490nm.cor = OD_490nm - meanBLANKS_TAC[1,1]
+                              )
+
+# plots to view the corrected values, are duplicates outliers?
+ggplot(TAC.cor, aes(x = Oyster_ID, y = OD_490nm.cor)) + geom_point()
+
+```
+
+```{r calculate TAC}
+
+# plate 1
+# y = 1.01x +0.00767; y = OD_570nm; x = Concentration (nmol)TAC.cor.calc <- TAC.cor %>% 
+TAC.cor.calc <- TAC.cor %>% #dplyr::filter(!OD_490nm.cor > 0.6) %>% 
+                            dplyr::mutate(
+                                UAE = (OD_490nm.cor - 0.00767) / 1.01,
+                                μM_CRE = UAE * 2189
+                                )
+
+# merge with total protein 
+TAC.mM_CRE_permgTotalProtein <- merge(TAC.cor.calc,BCA_calculatedMeans, by = "Oyster_ID") %>% 
+                                  dplyr::mutate(μM_CRE_permgProtein = μM_CRE/ meanTotalProtein_mg,
+                                                mM_CRE_permgProtein = μM_CRE_permgProtein/ 1000)
+
+
+
+# plot the two samples to view variation betwen duplicate samples 
+
+ggplot(TAC.mM_CRE_permgTotalProtein,
+        aes(x = Oyster_ID, 
+         y = mM_CRE_permgProtein)) + 
+  geom_point()
+
+# calculate means 
+TAC.mM_CRE_permgTotalProtein.Means <- TAC.mM_CRE_permgTotalProtein %>% 
+                               dplyr::group_by(Oyster_ID, Timepoint, Tank_number, Prime_treatment, Recovery_pre_challenge) %>% 
+                               dplyr::summarise(
+                                 mM_CRE_permgProtein.mean = mean(mM_CRE_permgProtein),
+                                 mM_CRE_permgProtein.n = dplyr::n(),
+                                 mM_CRE_permgProtein.sd = sd(mM_CRE_permgProtein),
+                                 mM_CRE_permgProtein.se = mM_CRE_permgProtein.sd/sqrt(mM_CRE_permgProtein.n)
+                               )
+write.csv(TAC.mM_CRE_permgTotalProtein, "Output/Fall_2025/assays/TAC_calculated_all.csv")
+write.csv(TAC.mM_CRE_permgTotalProtein.Means, "Output/Fall_2025/assays/TAC_calculated_means.csv")
+
+```

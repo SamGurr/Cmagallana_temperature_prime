@@ -1,0 +1,517 @@
+---
+title: "ATP_analysis.Rmd"
+author: "Samuel Gurr"
+date: "2026-09-03"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# SET WORKING DIRECTORY 
+knitr::opts_knit$set(root.dir = "C:/Users/gurrs/Documents/6_Github_repositories/SamGurr/Cgigas_temperature_prime/RAnalysis") # Sam's
+# knitr::opts_knit$set(root.dir = "C:/ < Anna add here > /Predictive_phenomics/RAnalysis") # Anna's root dir on her computer
+```
+
+
+```{r load libraries}
+library(readxl)
+library(stringr)
+library(pracma)
+library(ggplot2)
+library(ggpubr)
+```
+
+```{r load metadata}
+
+# metadata
+experiment_metadata <- read.csv("Data/Fall_2025/experiment_metadata.csv", sep=',')
+sample_spreadsheet  <- read.csv("Data/Fall_2025/Sample_spreadsheet.csv", sep=',') %>% dplyr::rename(Oyster_ID = Tube.ID)
+assays_metadata     <- read_excel("Data/Fall_2025/Assays/Assay_metadata.xlsx") %>% dplyr::rename(filename = File_name)
+
+```
+
+
+```{r load data}
+
+# ATP assay
+ATP_plate1.filepath <- "Data/Fall_2025/Assays/2025_Priming_ATP_n10_71626.xlsx"
+ATP_plate2.filepath <- "Data/Fall_2025/Assays/2025_Priming_ATP_n21_80726.xlsx"
+ATP_plate1.raw <- read_excel("Data/Fall_2025/Assays/2025_Priming_ATP_n10_71626.xlsx")
+ATP_plate2.raw <- read_excel("Data/Fall_2025/Assays/2025_Priming_ATP_n21_80726.xlsx")
+
+# total protein for ATP
+BCA_plate.filepath <- "Data/Fall_2025/Assays/Pierce BCA Total Protein_ATP_ThermoScientific_081026.xlsx"
+BCA_plate.raw <- read_excel("Data/Fall_2025/Assays/Pierce BCA Total Protein_ATP_ThermoScientific_081026.xlsx")
+
+
+
+```
+
+
+```{r function to convert raw to dataframe}
+covert_raw_df <- function (filepath_in) {
+  
+                          x        <- (basename(filepath_in))
+                          x.2      <- sub("\\.xlsx$", "", noquote(x))
+                          df       <- read_excel(filepath_in)
+                          file_out <- as.data.frame(df[-c(1:32,41:43),])# drop first columns and first 26 rows
+                          colnames(file_out) <- c("Plate_row", 1,2,3,4,5,6,7,8,9,10,11,12)
+                          
+                          x.time <- as.numeric(gsub(".*_(\\d+)\\.xlsx$", "\\1", x))
+                          file_out <- file_out %>%  
+                              tidyr::pivot_longer(
+                                cols = -Plate_row,
+                                names_to = "Plate_col",
+                                values_to = "OD_570nm"
+                              ) %>% 
+                            dplyr::mutate(filename = as.character(x.2)) %>% 
+                            dplyr::mutate(Well = paste0(Plate_row,Plate_col) ,
+                                          time= as.POSIXlt(strptime(sprintf("%06d", x.time), format = "%m%d%y"), format ="%m/%d/%Y")
+                                          )
+                          
+                          return(file_out)
+}
+
+
+```
+
+
+```{r convert raw to dataframe}
+
+ATP_plate1.df <- covert_raw_df(ATP_plate1.filepath) %>% dplyr::mutate(Assay = "ATP", plate = "plate1")
+ATP_plate2.df <- covert_raw_df(ATP_plate2.filepath) %>% dplyr::mutate(Assay = "ATP", plate = "plate2")
+
+BCA_plate.df  <- covert_raw_df(BCA_plate.filepath) %>% dplyr::mutate(Assay = "BCA", plate = "plate1") %>% 
+                                                       dplyr::rename(OD_562nm = OD_570nm)
+
+```
+
+```{r merge with medata}
+
+ATP_plate1_meta.df <- merge(assays_metadata, ATP_plate1.df, by = c("filename", "Well"))
+nrow(ATP_plate1_meta.df) == nrow(ATP_plate1.df %>% na.omit()) # TRUE
+
+
+ATP_plate2_meta.df <- merge(assays_metadata, ATP_plate2.df, by = c("filename", "Well"))
+nrow(ATP_plate2_meta.df) == nrow(ATP_plate2.df %>% na.omit()) # TRUE
+
+
+BCA_plate_meta.df <- merge(assays_metadata, BCA_plate.df, by = c("filename", "Well"))
+nrow(BCA_plate_meta.df) == nrow(BCA_plate.df %>% na.omit()) # TRUE
+```
+
+
+```{r merge with sample treatment metadata}
+
+sample_spreadsheet_reduced <- sample_spreadsheet %>%  dplyr::select('Oyster_ID', 'Timepoint', 'Tank_number', 'Prime_treatment', 'Recovery_pre_challenge')
+
+
+ATP_plate1_meta_sample.df  <- merge(ATP_plate1_meta.df, sample_spreadsheet_reduced, by = "Oyster_ID")
+ATP_plate2_meta_sample.df  <- merge(ATP_plate2_meta.df, sample_spreadsheet_reduced, by = "Oyster_ID")
+BCA_plate_meta_sample.df   <- merge(BCA_plate_meta.df, sample_spreadsheet_reduced, by = "Oyster_ID")
+
+```
+
+
+
+```{r calibration curve BCA}
+
+BCA_standards <- BCA_plate_meta.df %>% dplyr::filter(Type %in% 'Standard') %>% dplyr::filter(!Concentration == 1000)
+BCA_standards$Concentration <- as.numeric(BCA_standards$Concentration)
+BCA_standards$OD_562nm <- as.numeric(BCA_standards$OD_562nm)
+
+meanBLANKS_BCA <- BCA_standards %>% dplyr::filter(Concentration == 0) %>% dplyr::summarise(mean = mean(OD_562nm))
+
+# zero the absorbnace of the zero standard, and substract the mean absorb from the remaining
+BCA_standards.cor <- BCA_standards %>% 
+                              dplyr::mutate(OD_562nm.cor = 
+                                              dplyr::case_when(Concentration == 0 ~ 0,
+                                                        Concentration != 0 ~ OD_562nm - meanBLANKS_BCA[1,1]))
+
+BCA_standardsPLOT <- ggplot(data=BCA_standards.cor, 
+                             aes(x=Concentration,
+                                 y=OD_562nm.cor)) +
+                        geom_point() + 
+                        geom_smooth(method = "lm", se = FALSE)
+
+
+BCA_standardsPLOT <- ggplot(BCA_standards.cor, 
+                            aes(x = Concentration, y = OD_562nm.cor)) +
+  
+                          # Raw observations
+                          geom_point(alpha = 0.35) +
+                          
+                          # Mean +/- SE at each x value
+                          stat_summary(
+                            fun.data = mean_se,
+                            geom = "errorbar",
+                            width = 0.15,
+                            colour = "black"
+                          ) +
+                          stat_summary(
+                            fun = mean,
+                            geom = "point",
+                            size = 3,
+                            colour = "firebrick"
+                          ) +
+                          
+                          # Horizontal line through the overall mean
+                          stat_smooth(
+                            method = "lm",
+                            formula = y ~ x,
+                            se = FALSE
+                          ) +
+                          
+                          # Linear-model equation and R-squared
+                          ggpmisc::stat_poly_eq(
+                            formula = y ~ x,
+                            method = "lm",
+                            aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~~")),
+                            parse = TRUE,
+                            label.x.npc = "left",
+                            label.y.npc = "top"
+                          ) +
+                          
+                          theme_classic()
+
+pdf("Output/Summer_2026/BCA_ATP_standards.pdf", width =5, height =5)
+plot(BCA_standardsPLOT)
+dev.off()
+```
+
+```{r calibration curves ATP}
+
+# PLATE 1
+ATP_standards_plate1 <- ATP_plate1_meta.df %>% dplyr::filter(Type %in% 'Standard') # %>% dplyr::filter(!Concentration == 1000)
+ATP_standards_plate1$Concentration <- as.numeric(ATP_standards_plate1$Concentration)
+ATP_standards_plate1$OD_570nm    <- as.numeric(ATP_standards_plate1$OD_570nm)
+
+meanBLANKS_ATPplate1 <- ATP_standards_plate1 %>% dplyr::filter(Concentration == 0) %>% dplyr::summarise(mean = mean(OD_570nm))
+
+
+
+# zero the absorbnace of the zero standard, and substract the mean absorb from the remaining
+ATP_standards_plate1.cor <- ATP_standards_plate1 %>% 
+                              dplyr::mutate(OD_570nm.cor = 
+                                              dplyr::case_when(Concentration == 0 ~ 0,
+                                                        Concentration != 0 ~ OD_570nm - meanBLANKS_ATPplate1[1,1]))
+
+ATP1_standardsPLOT  <- ggplot(ATP_standards_plate1.cor , 
+                            aes(x = Concentration, y = OD_570nm.cor)) +
+  
+                          # Raw observations
+                          geom_point(alpha = 0.35) +
+                          
+                          # Mean +/- SE at each x value
+                          stat_summary(
+                            fun.data = mean_se,
+                            geom = "errorbar",
+                            width = 0.15,
+                            colour = "black"
+                          ) +
+                          stat_summary(
+                            fun = mean,
+                            geom = "point",
+                            size = 3,
+                            colour = "firebrick"
+                          ) +
+                          
+                          # Horizontal line through the overall mean
+                          stat_smooth(
+                            method = "lm",
+                            formula = y ~ x,
+                            se = FALSE
+                          ) +
+                          
+                          # Linear-model equation and R-squared
+                          ggpmisc::stat_poly_eq(
+                            formula = y ~ x,
+                            method = "lm",
+                            aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~~")),
+                            parse = TRUE,
+                            label.x.npc = "left",
+                            label.y.npc = "top"
+                          ) +
+  
+                          labs(title="ATP standards plate 1") +
+                          
+                          theme_classic()
+
+
+# PLATE 2
+ATP_standards_plate2 <- ATP_plate2_meta.df %>% dplyr::filter(Type %in% 'Standard') # %>% dplyr::filter(!Concentration == 1000)
+ATP_standards_plate2$Concentration <- as.numeric(ATP_standards_plate2$Concentration)
+ATP_standards_plate2$OD_570nm     <- as.numeric(ATP_standards_plate2$OD_570nm)
+
+meanBLANKS_ATPplate2 <- ATP_standards_plate2 %>% dplyr::filter(Concentration == 0) %>% dplyr::summarise(mean = mean(OD_570nm))
+
+# zero the absorbnace of the zero standard, and substract the mean absorb from the remaining
+ATP_standards_plate2.cor <- ATP_standards_plate2 %>% 
+                              dplyr::mutate(OD_570nm.cor = 
+                                              dplyr::case_when(Concentration == 0 ~ 0,
+                                                        Concentration != 0 ~ OD_570nm - meanBLANKS_ATPplate2[1,1]))
+
+ATP2_standardsPLOT  <- ggplot(ATP_standards_plate2.cor, 
+                            aes(x = Concentration, y = OD_570nm.cor)) +
+  
+                          # Raw observations
+                          geom_point(alpha = 0.35) +
+                          
+                          # Mean +/- SE at each x value
+                          stat_summary(
+                            fun.data = mean_se,
+                            geom = "errorbar",
+                            width = 0.15,
+                            colour = "black"
+                          ) +
+                          stat_summary(
+                            fun = mean,
+                            geom = "point",
+                            size = 3,
+                            colour = "firebrick"
+                          ) +
+                          
+                          # Horizontal line through the overall mean
+                          stat_smooth(
+                            method = "lm",
+                            formula = y ~ x,
+                            se = FALSE
+                          ) +
+                          
+                          # Linear-model equation and R-squared
+                          ggpmisc::stat_poly_eq(
+                            formula = y ~ x,
+                            method = "lm",
+                            aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~~")),
+                            parse = TRUE,
+                            label.x.npc = "left",
+                            label.y.npc = "top"
+                          ) +
+  
+                          labs(title="ATP standards plate 2") +
+                          
+                          theme_classic()
+
+
+pdf("Output/Summer_2026/ATP_standards.pdf", width =5, height =10)
+plot(
+    ggpubr::ggarrange(ATP1_standardsPLOT,
+                      ATP2_standardsPLOT,
+                      nrow = 2)
+)
+dev.off()
+```
+
+
+  * Subtract the mean blank absorbance from every reading
+  * Calculate the concentration of the diluted sample (Cdiluted) using the standard curve (y= mx + b)
+  * Coriginal = Cdiluted × DF
+  * Protein amount = Coriginal × Vsample
+
+```{r calculate total protein}
+
+# y = 0.00121x + 0.0493; y = OD_562nm; x = Concentration (ug / mL)
+
+BCA_plate_meta_sample.df$OD_562nm <- as.numeric(BCA_plate_meta_sample.df$OD_562nm)
+
+BCA_calculated <-  BCA_plate_meta_sample.df %>% 
+                      dplyr::mutate(DilutionFactor = dplyr::case_when(is.na(Notes) ~ 1,
+                                                                      !is.na(Notes) ~ 2.33),
+                                    OD_562nm.cor = as.numeric(OD_562nm) - meanBLANKS_BCA[1,1],
+                                    TotalProtein_ugmL = (((OD_562nm.cor - 0.0493) / 0.00121)  * as.numeric(DilutionFactor)),
+                                    TotalProtein_mgmL = (TotalProtein_ugmL/1000),
+                                    TotalProtein_mg   = TotalProtein_mgmL * (as.numeric(Volume_sample)/1000)
+                                    )
+
+
+BCA_calculatedMeans <- BCA_calculated %>% 
+                            dplyr::group_by(Oyster_ID) %>% 
+                            dplyr::summarise(
+                                    meanTotalProtein_mg = mean(TotalProtein_mg)
+                            )
+
+```
+
+## Calculate ATP in samples
+
+  * Using the ATP standard figure, apply the corrected sample absorbance/relative fluorescence 
+  to the standard curve to get ATP (B) amount in the sample wells. 
+
+  * Concentration of ATP (nmol/µL or µmol/mL or mM) in the test 
+  samples is calculated as: 
+  
+              ((𝐵/ 𝑉) * D) * DDF
+
+B = amount of ATP in the sample well calculated from standard curve (nmol or mM). 
+
+V = sample volume added in the sample wells (µL). 
+
+D = sample dilution factor if sample is diluted to fit within the  standard curve range (prior to reaction well set up) 
+
+DDF = deproteinization dilution factor (from Section 8.5). 
+
+  * Note: ATP molecular weight = 507.18 g/mol 
+  
+  
+```{r corrected and backgroundATP}
+
+# plot all the samples to view them
+ggplot(rbind(ATP_plate1_meta_sample.df,
+              ATP_plate2_meta_sample.df),
+        aes(x = Oyster_ID, 
+         y = OD_570nm,
+         color = Type)) + 
+  geom_point()
+
+# isolate background
+ATP_plate1_meta_sample.df %>% dplyr::filter(Type %in% 'Background') # only sample 131
+ATP_plate2_meta_sample.df %>% dplyr::filter(Type %in% 'Background') # many samples
+
+# merge and get the mean for the duplicates
+
+meanATP_background.cor <- rbind(ATP_plate1_meta_sample.df,
+                            ATP_plate2_meta_sample.df) %>% 
+                                      dplyr::filter(Type %in% 'Background') %>% 
+                                      dplyr::mutate(OD_570nm.background.cor = as.numeric(OD_570nm) - meanBLANKS_ATPplate1[1,1]) %>% 
+                                      dplyr::group_by(Oyster_ID) %>% 
+                                      dplyr::summarise(OD_570nm.MEANbackground.cor = mean(OD_570nm.background.cor))
+
+
+
+# plate 1 corrected for blanks
+
+ATP_plate1_meta_sample.df$OD_570nm <- as.numeric(ATP_plate1_meta_sample.df$OD_570nm)
+ATP_plate1.cor <- ATP_plate1_meta_sample.df %>% 
+                              dplyr::filter(!Type %in% NA) %>% # Anna has NAs coded in Type column for rows to skip %>% 
+                              dplyr::filter(Type %in% c('Sample', 'Duplicate')) %>% 
+                              dplyr::mutate(
+                                OD_570nm.cor = OD_570nm - meanBLANKS_ATPplate1[1,1]
+                              )
+
+
+# plate 2 corrected for blanks
+ATP_plate2_meta_sample.df$OD_570nm <- as.numeric(ATP_plate2_meta_sample.df$OD_570nm)
+ATP_plate2.cor  <- ATP_plate2_meta_sample.df %>% 
+                              dplyr::filter(Type %in% c('Sample', 'Duplicate')) %>% 
+                              dplyr::mutate(
+                                OD_570nm.cor = OD_570nm - meanBLANKS_ATPplate1[1,1])
+
+
+# merge plate 1 and plate 2 corrected 
+
+mergeATP.cor <- rbind(ATP_plate1.cor, ATP_plate2.cor) %>%  dplyr::select(Oyster_ID,OD_570nm.cor)
+
+# merge mergeATP.cor with background to assess its influence
+
+mergeATP.cor.background <- merge(mergeATP.cor, meanATP_background.cor, by = "Oyster_ID") %>% 
+                              dplyr::mutate(
+                                subtracted = OD_570nm.cor - OD_570nm.MEANbackground.cor,
+                                percent = ((OD_570nm.cor - OD_570nm.MEANbackground.cor) / (OD_570nm.cor)*100)
+                              )
+
+# plots to view the corrected values, are duplicates outliers?
+
+ggplot(
+  (mergeATP.cor.background %>% dplyr::filter(!percent < 0)),
+  aes(x = as.numeric(percent),
+      y = as.numeric(OD_570nm.cor))) +
+  geom_point()
+    
+
+ggplot(ATP_plate1.cor, aes(x = Oyster_ID, y = OD_570nm.cor)) + geom_point()
+
+
+```
+
+```{r calculate ATP}
+
+# plate 1
+# y = 0.118x + 0.00615; y = OD_570nm; x = Concentration (nmol)
+ATP_plate1.cor.calc <- ATP_plate1.cor %>% 
+                            dplyr::mutate(
+                                ATPnmol = (OD_570nm.cor - 0.00615) / 0.118, # solve for x; this is B
+                                ATPnmol.cor = (ATPnmol / as.numeric(Volume_sample))
+                                )
+
+
+# plate 2 equation
+# y = 0.141x + 0.0102; y = OD_570nm; x = Concentration (nmol)
+ATP_plate2.cor.calc <- ATP_plate2.cor %>% 
+                            dplyr::mutate(
+                                ATPnmol = (OD_570nm.cor - 0.0102) / 0.141, # solve for x; this is B
+                                ATPnmol.cor = (ATPnmol / as.numeric(Volume_sample))
+                                )
+
+
+
+# plot the two samples to view variation betwen duplicate samples 
+
+ggplot(rbind(ATP_plate1_calculated,
+              ATP_plate2_calculated),
+        aes(x = Oyster_ID, 
+         y = OD_570nm.cor)) + 
+  geom_point()
+
+# calculate means 
+ATP_plate1_calculatedMeans <- ATP_plate1_calculated %>% 
+                               dplyr::group_by(Oyster_ID, Timepoint, Tank_number, Prime_treatment, Recovery_pre_challenge) %>% 
+                               dplyr::summarise(
+                                 ATPnmol.mean = mean(ATPnmol.cor),
+                                 ATP.n = dplyr::n(),
+                                 ATP.sd = sd(ATPnmol.cor),
+                                 ATP.se = ATP.sd/sqrt(ATP.n)
+                               )
+
+ATP_plate2_calculatedMeans <- ATP_plate2_calculated %>% 
+                               dplyr::group_by(Oyster_ID, Timepoint, Tank_number, Prime_treatment, Recovery_pre_challenge) %>% 
+                               dplyr::summarise(
+                                 ATPnmol.mean = mean(ATPnmol.cor),
+                                 ATP.n = dplyr::n(),
+                                 ATP.sd = sd(ATPnmol.cor),
+                                 ATP.se = ATP.sd/sqrt(ATP.n)
+                               )
+
+ATPmaster <- rbind(ATP_plate1_calculatedMeans,
+                ATP_plate2_calculatedMeans)
+
+ATPmaster.totalprotein <- merge(BCA_calculatedMeans, ATPmaster, by = "Oyster_ID") %>% 
+                                dplyr::mutate(ATPnmol.permgProtein = ATPnmol.mean / meanTotalProtein_mg)
+
+length(unique(ATPmaster.totalprotein$Oyster_ID)) # 31 individuals
+ATPmaster.totalprotein %>%  dplyr::group_by(Timepoint, Prime_treatment) %>% dplyr::summarise(n = dplyr::n())
+rbind(ATP_plate1_meta_sample.df, ATP_plate2_meta_sample.df)%>%  dplyr::group_by(Timepoint, Prime_treatment) %>% dplyr::summarise(n = dplyr::n())
+
+master
+
+ggplot(data = (ATPmaster.totalprotein %>% dplyr::filter(!ATPnmol.permgProtein < 0)),
+      aes(x=Prime_treatment,
+          y = ATPnmol.permgProtein)) +
+  geom_point() +
+  facet_wrap(~Timepoint)
+
+
+ ggplot(data = (ATPmaster.totalprotein %>% dplyr::filter(!ATPnmol.permgProtein < 0)), 
+                                   aes(x=Prime_treatment, 
+                                       y = ATPnmol.permgProtein, 
+                                        group =  Timepoint)) +
+                                    stat_summary(
+                                      fun = mean,
+                                      geom = "point",
+                                      size = 3
+                                    ) +
+                                    stat_summary(
+                                      fun.data = mean_se,
+                                      geom = "errorbar",
+                                      width = 0.2
+                                    ) +
+                                    # labs(
+                                    #   x = "Treatment",
+                                    #   y = "Area under curve (Resazurin, correct to blank shell)",
+                                    #   title = "C. magallana juvniles temp ramp"
+                                    # )  +
+                                    facet_wrap(~Timepoint) +
+                                    theme_classic() 
+ 
+ 
+```

@@ -1,0 +1,1142 @@
+---
+title: "Survival"
+author: "Sam Gurr"
+date: "9/16/2025"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+### SET UP
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# SET WORKING DIRECTORY 
+knitr::opts_knit$set(root.dir = "C:/Users/gurrs/Documents/Github_repositories/Cgigas_temperature_prime/RAnalysis/") # Sam's work
+```
+
+### LOAD PACKAGES
+```{r, echo=FALSE}
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(rcompanion)
+library(FSA)
+library(car)
+library(forcats)
+library(kableExtra) # nice Rmd tables
+library(emmeans)
+library(ggpubr)
+library(survival)
+library(Rmisc)
+library(coxme)
+library(survminer)
+library(ggsurvfit) # survfit2
+library(gtsummary) # tbl_survfit
+```
+
+### load data
+
+```{r load  data, echo=FALSE}
+
+# load the raw data, just the counts of dead individuals each day
+df_raw       <- readxl::read_excel("../../Data/Summer_2026/Priming_Survival_metadata.xlsx") %>% 
+                    dplyr::mutate(Family_num = as.integer(gsub("[^0-9]", "", Family)))
+
+```
+
+* summary stats
+```{r 1 week test data summary stats}
+
+df_raw_test <- df_raw %>% 
+                    dplyr::group_by(Treatment, Family_num,  Days_Alive, Status) %>% 
+                    dplyr::summarise(Deaths = dplyr::n())
+
+
+append.df <- data.frame( # data frame with Days 0-7 and NA for PercSurv, use to append in the loop
+  Days = c(0, 0.0833, 1, 2, 3, 4, 5, 6, 7),
+  PercSurv = NA_real_
+)
+
+
+loop_t <- as.data.frame(unique(df_raw_test$Treatment))
+loop_f <- as.data.frame(unique(df_raw_test$Family_num))
+
+output.df <- data.frame()
+running.df           <- data.frame(matrix(nrow = 1, ncol = 7)) # create dataframe to save cumunalitively during for loop
+colnames(running.df) <- c('Family_num', 'Treatment', 'Days_Alive', 'Status', 'Deaths', 'Cumulative_deaths', 'PercSurv') # names for columns in the for loop
+
+for (t in 1:nrow(loop_t)) {
+loop_t_df <- df_raw_test %>% dplyr::filter(Treatment %in% loop_t[t,])
+
+        for (f in 1:nrow(loop_f)) {
+        loop_f.df <- loop_t_df %>% dplyr::filter(Family_num %in% loop_f[f,]) %>% dplyr::arrange(Days_Alive)
+      
+      
+      
+        loop_f.df$Cumulative_deaths <- cumsum(
+          ifelse(loop_f.df$Status == 1, loop_f.df$Deaths, 0)
+        )
+        
+        
+        calc.df  <- loop_f.df %>% 
+                              dplyr::mutate(
+                                 PercSurv = signif( (((12-Cumulative_deaths)/12)*100), 3)
+                              ) %>% 
+                              dplyr::select(Family_num, Treatment, Days_Alive, Status, Deaths, Cumulative_deaths, PercSurv) %>% 
+                              dplyr::rename(Days = Days_Alive)
+        
+        calc.df.clean <- calc.df %>%
+                          dplyr::mutate(Days = signif(Days, 3)) %>% 
+                          bind_rows(append.df %>% anti_join(calc.df, by = "Days")) %>% # add days that are missing, fill with NAs for other columns
+                          dplyr::arrange(Days) %>% # sort by day
+                          dplyr::mutate(Family_num = loop_f[f,],# fill the NAs
+                                        Treatment = loop_t[t,], # fill the NAs 
+                                        PercSurv = case_when(
+                                          Days == 0 ~ 100, # insert 100 percent survival at time 0
+                                          TRUE ~ PercSurv)) 
+        
+        calc.df.clean$PercSurv <- zoo::na.locf( # fille in NAs for PercSurv with the last value when no morts recorded
+                                            calc.df.clean$PercSurv,
+                                            na.rm = FALSE
+                                          )
+        
+        running.df <- calc.df.clean %>% distinct(Days, PercSurv, .keep_all = TRUE)
+          
+ 
+        output.df <- rbind(output.df,
+                           running.df)
+
+        } # loop f for Family_num
+
+} # loop t for treatment
+
+# View(df_1week_complete)
+
+# ascenarios at which there were morts on day 7 keep status ==1, otherwise keep the NA and 0 statu sfor 7 
+# also add add EBV information
+output.df <- (output.df %>%
+                group_by(Treatment, Family_num, Days) %>%
+                filter(
+                  Days != 7 |
+                  n() == 1 |
+                  Status == 1 |
+                  is.na(Status)
+                ) %>%
+                ungroup()) %>% 
+                dplyr::mutate(Family_EBV = dplyr::case_when(Family_num > 45 ~ 'Low',
+                                                            Family_num < 45 ~ 'High'))
+
+
+SummaryStats.Treatment <- summarySE(output.df , measurevar="PercSurv", groupvars=c("Treatment", "Days")) %>%
+                    dplyr::mutate(Treatment_asnum = as.numeric(substr(Treatment,1,1)),
+                                  Percent_Survival =
+                                    case_when(PercSurv < 0 ~ 0,
+                                              TRUE ~ PercSurv),
+                                  se =
+                                    case_when(PercSurv < 0 ~ 0,
+                                              TRUE ~ se),
+                                  sd =
+                                    case_when(PercSurv < 0 ~ 0,
+                                              TRUE ~ sd))
+
+
+SummaryStats.Treatment_EBV <- summarySE(output.df , measurevar="PercSurv", groupvars=c("Treatment","Family_EBV", "Days")) %>%
+                    dplyr::mutate(Treatment_asnum = as.numeric(substr(Treatment,1,1)),
+                                  Percent_Survival =
+                                                case_when(PercSurv < 0 ~ 0,
+                                                          TRUE ~ PercSurv),
+                                              se =
+                                                case_when(PercSurv < 0 ~ 0,
+                                                          TRUE ~ se),
+                                              sd =
+                                                case_when(PercSurv < 0 ~ 0,
+                                                          TRUE ~ sd))
+
+SummaryStats.Treatment
+SummaryStats.Treatment_EBV
+
+```
+
+
+```{r convert to binary}
+
+alive_dead.df <- output.df  %>%
+                                mutate(
+                                  n_initial = 12, # all families started with 12 animals, 1 per tan kfor 12 tanks per treatment
+                                  Cumulative_deaths = if_else(
+                                    PercSurv == 100.00,
+                                    0,
+                                    Cumulative_deaths
+                                  )
+                                ) %>%
+                                tidyr::fill(Cumulative_deaths, .direction = "down") %>% # fill all rows that are NA (no deaths at a given date) with the curretn deaths
+                                dplyr::group_by(Family_num, Treatment) %>%
+                                dplyr::arrange(Days, .by_group = TRUE) %>%
+                                dplyr::mutate(
+                                  new_dead = Cumulative_deaths - lag(Cumulative_deaths, default = 0),
+                                  alive_after = n_initial - Cumulative_deaths) %>%
+                                ungroup()
+
+death_rows <- alive_dead.df %>%
+                            filter(new_dead > 0) %>%
+                            uncount(new_dead, .id = "death_number") %>%
+                            mutate(
+                              individual = paste(Family_num, Treatment, "dead",death_number, sep = "_"),
+                              time = Days,
+                              status = 1L
+                            ) %>%
+                            select(Treatment, Family_num, Family_EBV, individual, time, status)
+
+censored_rows <- alive_dead.df %>%
+                            group_by(Family_num, Treatment) %>%
+                            slice_tail(n = 1) %>%
+                            uncount(alive_after, .id = "alive_number") %>%
+                            mutate(
+                              individual = paste(Family_num, Treatment, "alive", alive_number, sep = "_"),
+                              time = Days,
+                              status = 0L
+                            ) %>%
+                            select(Treatment, Family_num, Family_EBV, individual, time, status)
+
+survival_binary <- bind_rows(death_rows, censored_rows) %>%
+                          arrange(Treatment, Family_num, Family_EBV, time, desc(status))
+
+
+```
+
+### create surv objects
+
+```{r create surv objects}
+
+surv_all <- survfit2(Surv(time, status) ~ Treatment, data = (survival_binary))
+
+surv_HighEBV <- survfit2(Surv(time, status) ~ Treatment, data = (survival_binary %>% dplyr::filter(Family_EBV %in% 'High')))
+
+surv_LowEBV <- survfit2(Surv(time, status) ~ Treatment, data = (survival_binary %>% dplyr::filter(Family_EBV %in% 'Low')))
+
+```
+
+
+### Plot Kaplan Meier
+
+```{r Kaplan Meier}
+
+KaplanMeier_full <- surv_all %>% 
+                        ggsurvfit(linetype_aes = F, linewidth = 1,type ="survival") +
+                        scale_color_manual(values = c("darkgreen","orange","darkorange2","darkred")) +
+                        scale_fill_manual(values = c("darkgreen","orange","darkorange2","darkred")) +
+                        labs(
+                          x = "Days",
+                          y = "Overall survival probability"
+                        ) + 
+                        add_confidence_interval() +
+                        # add_risktable() +
+                        # add_risktable_strata_symbol() + # (symbol = "\U25CF", size = 10
+                        scale_ggsurvfit(x_scales = list(breaks = 0:10)) +
+                        add_pvalue(location  = "annotation", x = 3.5)
+
+# plot the surv data
+pdf("../../Output/Summer_2026/survival/survival_KaplanMeier.pdf", width=6, height = 5)
+print(KaplanMeier_full)
+dev.off()
+
+
+KaplanMeier_HighEBV <- surv_HighEBV %>% 
+                        ggsurvfit(linetype_aes = F, linewidth = 1,type ="survival") +
+                        scale_color_manual(values = c("darkgreen","orange","darkorange2","darkred")) +
+                        scale_fill_manual(values = c("darkgreen","orange","darkorange2","darkred")) +
+                        labs(
+                          x = "Days",
+                          y = "Overall survival probability"
+                        ) + 
+                        add_confidence_interval() +
+                        # add_risktable() +
+                        # add_risktable_strata_symbol() + # (symbol = "\U25CF", size = 10
+                        scale_ggsurvfit(x_scales = list(breaks = 0:10)) +
+                        add_pvalue(location  = "annotation", x = 3.5)
+
+
+KaplanMeier_LowEBV <- surv_LowEBV %>% 
+                        ggsurvfit(linetype_aes = F, linewidth = 1,type ="survival") +
+                        scale_color_manual(values = c("darkgreen","orange","darkorange2","darkred")) +
+                        scale_fill_manual(values = c("darkgreen","orange","darkorange2","darkred")) +
+                        labs(
+                          x = "Days",
+                          y = "Overall survival probability"
+                        ) + 
+                        add_confidence_interval() +
+                        # add_risktable() +
+                        # add_risktable_strata_symbol() + # (symbol = "\U25CF", size = 10
+                        scale_ggsurvfit(x_scales = list(breaks = 0:10)) +
+                        add_pvalue(location  = "annotation", x = 3.5)
+
+KaplanMeier_EBVgroups <- ggpubr::ggarrange(KaplanMeier_LowEBV,
+                                           KaplanMeier_HighEBV,
+                                           nrow=1, ncol= 2)
+
+
+# plot the surv data
+pdf("../../Output/Summer_2026/survival/survival_KaplanMeier_EBVgroups.pdf", width=10, height = 5)
+print(KaplanMeier_EBVgroups)
+dev.off()
+
+```
+
+### run cox proportional hazards 
+
+  * run the following models 
+    * surv_all - all EBV gouuops and all priming treatments 
+    * surv_HighWBV and surv_LowEBV - subgroups
+```{r all data cox proportional hazards model}
+
+# prepare data column by combining the EBV group and prie treamtent to a single variable
+# Why? otherwise the cox comapres to prime treamtnet 0 that is nested, making results unclear
+survival_binary <- survival_binary %>% mutate(GroupEBV_PrimeTreatment = paste0(Family_EBV,"_",Treatment))
+
+# run cox test on all data on the effect GroupEBV_PrimeTreatment
+coxph.all   <- coxph(formula = Surv(time, status) ~ GroupEBV_PrimeTreatment, data = (survival_binary))
+summary(coxph.all)
+# GroupEBV_PrimeTreatmentHigh_1 day -0.22033   0.80226  0.17799 -1.238   0.2158    
+# GroupEBV_PrimeTreatmentHigh_3 day -1.48627   0.22621  0.21432 -6.935 4.07e-12 ***
+# GroupEBV_PrimeTreatmentHigh_7 day -3.65737   0.02580  0.46615 -7.846 4.30e-15 ***
+# GroupEBV_PrimeTreatmentLow_0 day  -0.37665   0.68615  0.17574 -2.143   0.0321 *  
+# GroupEBV_PrimeTreatmentLow_1 day  -0.17068   0.84309  0.17881 -0.955   0.3398    
+# GroupEBV_PrimeTreatmentLow_3 day  -1.53459   0.21554  0.21431 -7.161 8.02e-13 ***
+# GroupEBV_PrimeTreatmentLow_7 day  -3.16199   0.04234  0.37716 -8.384  < 2e-16 ***
+
+# pot results
+coxph.all_hr <- broom::tidy(coxph.all, exponentiate = TRUE, conf.int = TRUE)
+
+ggplot(coxph.all_hr, aes(x = estimate, y = term)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+  geom_vline(xintercept = 1, linetype = 2) +
+  scale_x_log10() +
+  theme_classic() +
+  labs(x = "Hazard ratio", y = NULL)
+
+coxph.all_plot <- ggforest(coxph.all, data = survival_binary)
+
+# Note: our design is great here becuase we do not require a random factor to test thi
+# each tank had a single indicidual so our survival assemssntfor family (replicates of the EBV gorup
+# does not have to include a random variable in our model
+
+
+pdf("../../Output/Summer_2026/survival/survival_CoxProprtionalHazards.pdf", width=8, height=5)
+print(coxph.all_plot)
+dev.off()
+
+
+```
+
+### Heatmap 
+```{r heatmap}
+
+
+# Install / load required packages
+if (!requireNamespace("ggplot2",   quietly = TRUE)) install.packages("ggplot2")
+if (!requireNamespace("dplyr",     quietly = TRUE)) install.packages("dplyr")
+if (!requireNamespace("tidyr",     quietly = TRUE)) install.packages("tidyr")
+if (!requireNamespace("grid",      quietly = TRUE)) install.packages("grid")
+if (!requireNamespace("gtable",    quietly = TRUE)) install.packages("gtable")
+if (!requireNamespace("scales",    quietly = TRUE)) install.packages("scales")
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(grid)
+library(gtable)
+library(scales)
+
+
+# ─── 3. Palette & Theme ───────────────────────────────────────
+
+palette_low  <- "grey50"   # deep navy
+palette_mid  <- "grey75"   # near-white
+palette_high <- "grey95"   # deep crimson
+
+group_bar_cols <- c("Group 1" = "#2E86AB", "Group 2" = "#E07B39")
+
+base_family <- "sans"
+
+theme_heatmap <- theme_minimal(base_family = base_family) +
+  theme(
+    # Axes
+    axis.text.x  = element_text(size = 9,  angle = 35, hjust = 1, colour = "#333333"),
+    axis.text.y  = element_text(size = 10, colour = "#333333", face = "bold"),
+    axis.title   = element_blank(),
+    axis.ticks   = element_blank(),
+
+    # Grid
+    panel.grid   = element_blank(),
+
+    # Legend
+    legend.position    = "right",
+    legend.title       = element_text(size = 9, face = "bold"),
+    legend.text        = element_text(size = 8),
+    legend.key.width   = unit(0.5, "cm"),
+    legend.key.height  = unit(1.8, "cm"),
+
+    # Strip (group labels)
+    strip.text         = element_text(size = 11, face = "bold", colour = "white"),
+    strip.background   = element_rect(fill = NA, colour = NA),
+
+    # Titles
+    plot.title         = element_text(size = 15, face = "bold",   hjust = 0,
+                                      colour = "#1A1A2E", margin = margin(b = 4)),
+    plot.subtitle      = element_text(size = 10, colour = "#555555", hjust = 0,
+                                      margin = margin(b = 16)),
+    plot.caption       = element_text(size = 8,  colour = "#888888", hjust = 1),
+    plot.margin        = margin(t = 16, r = 16, b = 16, l = 16),
+    plot.background    = element_rect(fill = "white", colour = NA),
+    panel.background   = element_rect(fill = "white", colour = NA)
+  )
+
+# ─── 4. Build the Heatmap ─────────────────────────────────────
+
+ggplot( (output.df %>% dplyr::filter(Days == 7)), 
+            aes(x = as.factor(Family_num), 
+                y = Treatment, 
+                group =Family_EBV,
+                fill = PercSurv)) +
+
+  # Tiles
+  geom_tile(colour = "white", linewidth = 0.8) +
+
+  # Value labels inside each cell
+  geom_text(aes(label = sprintf("%.1f", PercSurv)),
+            size = 3.2, colour = "grey20", fontface = "bold") +
+
+  # Colour scale
+  scale_fill_gradient2(
+    low      = palette_low,
+    mid      = palette_mid,
+    high     = palette_high,
+    midpoint = 50,
+    limits   = c(0, 100),
+    name     = "Score",
+    labels   = label_number(suffix = "")
+  ) +theme_heatmap 
+  
+
+
+
+```
+
+
+# MEANse survival survival plot
+```{r 1 week plot survival mean SE}
+# plot relative to stocking density aas embryos 
+
+
+SummaryStats.Treatment_EBV$Family_EBV <- forcats::fct_relevel(as.factor(SummaryStats.Treatment_EBV$Family_EBV), 
+                                                              "Low", "High")
+# plot relative to 100$% restart at D stage 
+PlotMeanSE <-  ggplot(SummaryStats.Treatment_EBV, 
+                      aes(x=Days, y=Percent_Survival, color=Treatment)) + geom_line()+
+                          geom_point(position=position_dodge(.1))+ 
+                           geom_errorbar(aes(ymin=Percent_Survival-se, 
+                                             ymax=Percent_Survival+se), width=.2,
+                                        position=position_dodge(.1)) +
+                          scale_color_manual(values = c("darkgreen","orange","darkorange2","darkred")) +
+                          theme(legend.position="right", legend.direction="vertical", 
+                                legend.title = element_blank())+ theme_bw() + 
+                          labs(x="Day", y="Percent Survival")+ #scale_y_continuous(breaks=seq(0,100,20))+ 
+                          ggtitle("") + 
+                          theme(panel.grid.major = element_blank(), 
+                                panel.grid.minor = element_blank(), 
+                                panel.background = element_blank(), 
+                                axis.line = element_line(colour = "black")) +
+                          theme_classic() +
+                          facet_wrap(~Family_EBV)
+                    
+PlotMeanSE
+
+
+# output the data !!
+write.csv(SummaryStats.Treatment_EBV,"../../Output/Summer_2026/survival/survival_MeanSE.csv")
+
+pdf("../../Output/Summer_2026/survival/survival_MeanSE.pdf", width=10, height=5)
+print(PlotMeanSE)
+dev.off()
+
+
+```
+
+* hormetic curve plots
+  - each day post challenge
+```{r hormetic curve}
+
+control_yint_HighEBV_D1        <- (SummaryStats.Treatment_EBV %>% dplyr::filter(c(Days == 1 & 
+                                                                                    Treatment %in% '0 day' &
+                                                                                      Family_EBV %in% 'High')))$Percent_Survival
+HighEBVDay1_hormetic_curve_MeanSE <-  ggplot( (SummaryStats.Treatment_EBV %>% 
+                                              dplyr::filter(Days == 1 &
+                                                              Family_EBV %in% 'High')), 
+                                    aes(x=as.numeric(substr(Treatment,1,1)),
+                                        y=Percent_Survival)) + 
+                                          geom_point() +
+                                          geom_errorbar(aes(ymin = Percent_Survival - se, ymax = Percent_Survival + se), width = 0.2) +
+                                          geom_smooth(method = "loess", color = "grey20") +
+                                          geom_hline(yintercept = control_yint_HighEBV_D1, color = "grey50", linetype = "dashed", size = 1) +
+                                          # scale_color_manual(values=c("green4", "darkorange1", "purple"))+
+                                          theme(legend.position="right", legend.direction="vertical", 
+                                                legend.title = element_blank())+ theme_bw() + 
+                                          labs(title= "High EBV Day1",
+                                               x="Prime treatment",
+                                               y="Response")+ #scale_y_continuous(breaks=seq(0,100,20))+ 
+                                          ggtitle("Day 1") + 
+                                                theme(panel.grid.major = element_blank(), 
+                                                # axis.title.x = element_blank(),
+                                                panel.grid.minor = element_blank(), 
+                                                panel.background = element_blank(), 
+                                                axis.line = element_line(colour = "black"))+
+                                          theme_classic() +
+                                          facet_wrap(~Family_EBV)
+
+
+control_yint_LowEBV_D1        <- (SummaryStats.Treatment_EBV %>% dplyr::filter(c(Days == 1 & 
+                                                                                    Treatment %in% '0 day' &
+                                                                                      Family_EBV %in% 'Low')))$Percent_Survival
+LowEBVDay1_hormetic_curve_MeanSE <-  ggplot( (SummaryStats.Treatment_EBV %>% 
+                                              dplyr::filter(Days == 1 &
+                                                              Family_EBV %in% 'Low')), 
+                                    aes(x=as.numeric(substr(Treatment,1,1)),
+                                        y=Percent_Survival)) + 
+                                          geom_point() +
+                                          geom_errorbar(aes(ymin = Percent_Survival - se, ymax = Percent_Survival + se), width = 0.2) +
+                                          geom_smooth(method = "loess", color = "grey20") +
+                                          geom_hline(yintercept = control_yint_LowEBV_D1, color = "grey50", linetype = "dashed", size = 1) +
+                                          # scale_color_manual(values=c("green4", "darkorange1", "purple"))+
+                                          theme(legend.position="right", legend.direction="vertical", 
+                                                legend.title = element_blank())+ theme_bw() + 
+                                          labs(title= "High EBV Day1",
+                                               x="Prime treatment", 
+                                               y="Response")+ #scale_y_continuous(breaks=seq(0,100,20))+ 
+                                          ggtitle("Day 1") + 
+                                                theme(panel.grid.major = element_blank(), 
+                                                # axis.title.x = element_blank(),
+                                                panel.grid.minor = element_blank(), 
+                                                panel.background = element_blank(), 
+                                                axis.line = element_line(colour = "black"))+
+                                          theme_classic() +
+                                          facet_wrap(~Family_EBV)
+Day1_hormetic_curve <- ggpubr::ggarrange(HighEBVDay1_hormetic_curve_MeanSE,
+                                         LowEBVDay1_hormetic_curve_MeanSE,
+                                         nrow=2)
+
+
+
+# DAY 2 HORMETIC CURVE 
+
+
+control_yint_HighEBV_D2        <- (SummaryStats.Treatment_EBV %>% dplyr::filter(c(Days == 2 & 
+                                                                                    Treatment %in% '0 day' &
+                                                                                      Family_EBV %in% 'High')))$Percent_Survival
+HighEBVDay2_hormetic_curve_MeanSE <-  ggplot( (SummaryStats.Treatment_EBV %>% 
+                                              dplyr::filter(Days == 2 &
+                                                              Family_EBV %in% 'High')), 
+                                    aes(x=as.numeric(substr(Treatment,1,1)),
+                                        y=Percent_Survival)) + 
+                                          geom_point() +
+                                          geom_errorbar(aes(ymin = Percent_Survival - se, ymax = Percent_Survival + se), width = 0.2) +
+                                          geom_smooth(method = "loess", color = "grey20") +
+                                          geom_hline(yintercept = control_yint_HighEBV_D2, color = "grey50", linetype = "dashed", size = 1) +
+                                          # scale_color_manual(values=c("green4", "darkorange1", "purple"))+
+                                          theme(legend.position="right", legend.direction="vertical", 
+                                                legend.title = element_blank())+ theme_bw() + 
+                                          labs(title= "High EBV Day2",
+                                               x="Prime treatment",
+                                               y="Response")+ #scale_y_continuous(breaks=seq(0,100,20))+ 
+                                          ggtitle("Day 2") + 
+                                                theme(panel.grid.major = element_blank(), 
+                                                # axis.title.x = element_blank(),
+                                                panel.grid.minor = element_blank(), 
+                                                panel.background = element_blank(), 
+                                                axis.line = element_line(colour = "black"))+
+                                          theme_classic() +
+                                          facet_wrap(~Family_EBV)
+
+
+control_yint_LowEBV_D2        <- (SummaryStats.Treatment_EBV %>% dplyr::filter(c(Days == 2 & 
+                                                                                    Treatment %in% '0 day' &
+                                                                                      Family_EBV %in% 'Low')))$Percent_Survival
+LowEBVDay2_hormetic_curve_MeanSE <-  ggplot( (SummaryStats.Treatment_EBV %>% 
+                                              dplyr::filter(Days == 2 &
+                                                              Family_EBV %in% 'Low')), 
+                                    aes(x=as.numeric(substr(Treatment,1,1)),
+                                        y=Percent_Survival)) + 
+                                          geom_point() +
+                                          geom_errorbar(aes(ymin = Percent_Survival - se, ymax = Percent_Survival + se), width = 0.2) +
+                                          geom_smooth(method = "loess", color = "grey20") +
+                                          geom_hline(yintercept = control_yint_LowEBV_D2, color = "grey50", linetype = "dashed", size = 1) +
+                                          # scale_color_manual(values=c("green4", "darkorange1", "purple"))+
+                                          theme(legend.position="right", legend.direction="vertical", 
+                                                legend.title = element_blank())+ theme_bw() + 
+                                          labs(title= "lOW EBV Day2",
+                                               x="Prime treatment", 
+                                               y="Response")+ #scale_y_continuous(breaks=seq(0,100,20))+ 
+                                          ggtitle("Day 2") + 
+                                                theme(panel.grid.major = element_blank(), 
+                                                # axis.title.x = element_blank(),
+                                                panel.grid.minor = element_blank(), 
+                                                panel.background = element_blank(), 
+                                                axis.line = element_line(colour = "black"))+
+                                          theme_classic() +
+                                          facet_wrap(~Family_EBV)
+Day2_hormetic_curve <- ggpubr::ggarrange(HighEBVDay2_hormetic_curve_MeanSE,
+                                         LowEBVDay2_hormetic_curve_MeanSE,
+                                         nrow=2)
+
+
+
+
+
+
+# DAY 3 HORMETIC CURVE 
+
+
+control_yint_HighEBV_D3        <- (SummaryStats.Treatment_EBV %>% dplyr::filter(c(Days == 3& 
+                                                                                    Treatment %in% '0 day' &
+                                                                                      Family_EBV %in% 'High')))$Percent_Survival
+HighEBVDay3_hormetic_curve_MeanSE <-  ggplot( (SummaryStats.Treatment_EBV %>% 
+                                              dplyr::filter(Days == 3 &
+                                                              Family_EBV %in% 'High')), 
+                                    aes(x=as.numeric(substr(Treatment,1,1)),
+                                        y=Percent_Survival)) + 
+                                          geom_point() +
+                                          geom_errorbar(aes(ymin = Percent_Survival - se, ymax = Percent_Survival + se), width = 0.2) +
+                                          geom_smooth(method = "loess", color = "grey20") +
+                                          geom_hline(yintercept = control_yint_HighEBV_D3, color = "grey50", linetype = "dashed", size = 1) +
+                                          # scale_color_manual(values=c("green4", "darkorange1", "purple"))+
+                                          theme(legend.position="right", legend.direction="vertical", 
+                                                legend.title = element_blank())+ theme_bw() + 
+                                          labs(title= "High EBV Day2",
+                                               x="Prime treatment",
+                                               y="Response")+ #scale_y_continuous(breaks=seq(0,100,20))+ 
+                                          ggtitle("Day 3") + 
+                                                theme(panel.grid.major = element_blank(), 
+                                                # axis.title.x = element_blank(),
+                                                panel.grid.minor = element_blank(), 
+                                                panel.background = element_blank(), 
+                                                axis.line = element_line(colour = "black"))+
+                                          theme_classic() +
+                                          facet_wrap(~Family_EBV)
+
+
+control_yint_LowEBV_D3        <- (SummaryStats.Treatment_EBV %>% dplyr::filter(c(Days == 3 & 
+                                                                                    Treatment %in% '0 day' &
+                                                                                      Family_EBV %in% 'Low')))$Percent_Survival
+LowEBVDay3_hormetic_curve_MeanSE <-  ggplot( (SummaryStats.Treatment_EBV %>% 
+                                              dplyr::filter(Days == 3 &
+                                                              Family_EBV %in% 'Low')), 
+                                    aes(x=as.numeric(substr(Treatment,1,1)),
+                                        y=Percent_Survival)) + 
+                                          geom_point() +
+                                          geom_errorbar(aes(ymin = Percent_Survival - se, ymax = Percent_Survival + se), width = 0.2) +
+                                          geom_smooth(method = "loess", color = "grey20") +
+                                          geom_hline(yintercept = control_yint_LowEBV_D3, color = "grey50", linetype = "dashed", size = 1) +
+                                          # scale_color_manual(values=c("green4", "darkorange1", "purple"))+
+                                          theme(legend.position="right", legend.direction="vertical", 
+                                                legend.title = element_blank())+ theme_bw() + 
+                                          labs(title= "lOW EBV Day2",
+                                               x="Prime treatment", 
+                                               y="Response")+ #scale_y_continuous(breaks=seq(0,100,20))+ 
+                                          ggtitle("Day 3") + 
+                                                theme(panel.grid.major = element_blank(), 
+                                                # axis.title.x = element_blank(),
+                                                panel.grid.minor = element_blank(), 
+                                                panel.background = element_blank(), 
+                                                axis.line = element_line(colour = "black"))+
+                                          theme_classic() +
+                                          facet_wrap(~Family_EBV)
+Day3_hormetic_curve <- ggpubr::ggarrange(HighEBVDay3_hormetic_curve_MeanSE,
+                                         LowEBVDay3_hormetic_curve_MeanSE,
+                                         nrow=2)
+
+
+
+
+
+
+# DAY 4 HORMETIC CURVE 
+
+
+control_yint_HighEBV_D4        <- (SummaryStats.Treatment_EBV %>% dplyr::filter(c(Days == 4 & 
+                                                                                    Treatment %in% '0 day' &
+                                                                                      Family_EBV %in% 'High')))$Percent_Survival
+HighEBVDay4_hormetic_curve_MeanSE <-  ggplot( (SummaryStats.Treatment_EBV %>% 
+                                              dplyr::filter(Days == 4 &
+                                                              Family_EBV %in% 'High')), 
+                                    aes(x=as.numeric(substr(Treatment,1,1)),
+                                        y=Percent_Survival)) + 
+                                          geom_point() +
+                                          geom_errorbar(aes(ymin = Percent_Survival - se, ymax = Percent_Survival + se), width = 0.2) +
+                                          geom_smooth(method = "loess", color = "grey20") +
+                                          geom_hline(yintercept = control_yint_HighEBV_D4, color = "grey50", linetype = "dashed", size = 1) +
+                                          # scale_color_manual(values=c("green4", "darkorange1", "purple"))+
+                                          theme(legend.position="right", legend.direction="vertical", 
+                                                legend.title = element_blank())+ theme_bw() + 
+                                          labs(title= "High EBV Day4",
+                                               x="Prime treatment",
+                                               y="Response")+ #scale_y_continuous(breaks=seq(0,100,20))+ 
+                                          ggtitle("Day 4") + 
+                                                theme(panel.grid.major = element_blank(), 
+                                                # axis.title.x = element_blank(),
+                                                panel.grid.minor = element_blank(), 
+                                                panel.background = element_blank(), 
+                                                axis.line = element_line(colour = "black"))+
+                                          theme_classic() +
+                                          facet_wrap(~Family_EBV)
+
+
+control_yint_LowEBV_D4        <- (SummaryStats.Treatment_EBV %>% dplyr::filter(c(Days == 4 & 
+                                                                                    Treatment %in% '0 day' &
+                                                                                      Family_EBV %in% 'Low')))$Percent_Survival
+LowEBVDay4_hormetic_curve_MeanSE <-  ggplot( (SummaryStats.Treatment_EBV %>% 
+                                              dplyr::filter(Days == 4 &
+                                                              Family_EBV %in% 'Low')), 
+                                    aes(x=as.numeric(substr(Treatment,1,1)),
+                                        y=Percent_Survival)) + 
+                                          geom_point() +
+                                          geom_errorbar(aes(ymin = Percent_Survival - se, ymax = Percent_Survival + se), width = 0.2) +
+                                          geom_smooth(method = "loess", color = "grey20") +
+                                          geom_hline(yintercept = control_yint_LowEBV_D4, color = "grey50", linetype = "dashed", size = 1) +
+                                          # scale_color_manual(values=c("green4", "darkorange1", "purple"))+
+                                          theme(legend.position="right", legend.direction="vertical", 
+                                                legend.title = element_blank())+ theme_bw() + 
+                                          labs(title= "lOW EBV Day4",
+                                               x="Prime treatment", 
+                                               y="Response")+ #scale_y_continuous(breaks=seq(0,100,20))+ 
+                                          ggtitle("Day 4") + 
+                                                theme(panel.grid.major = element_blank(), 
+                                                # axis.title.x = element_blank(),
+                                                panel.grid.minor = element_blank(), 
+                                                panel.background = element_blank(), 
+                                                axis.line = element_line(colour = "black"))+
+                                          theme_classic() +
+                                          facet_wrap(~Family_EBV)
+Day4_hormetic_curve <- ggpubr::ggarrange(HighEBVDay4_hormetic_curve_MeanSE,
+                                         LowEBVDay4_hormetic_curve_MeanSE,
+                                         nrow=2)
+
+
+
+
+# DAY 5 HORMETIC CURVE 
+
+
+control_yint_HighEBV_D5        <- (SummaryStats.Treatment_EBV %>% dplyr::filter(c(Days == 5 & 
+                                                                                    Treatment %in% '0 day' &
+                                                                                      Family_EBV %in% 'High')))$Percent_Survival
+HighEBVDay5_hormetic_curve_MeanSE <-  ggplot( (SummaryStats.Treatment_EBV %>% 
+                                              dplyr::filter(Days == 5 &
+                                                              Family_EBV %in% 'High')), 
+                                    aes(x=as.numeric(substr(Treatment,1,1)),
+                                        y=Percent_Survival)) + 
+                                          geom_point() +
+                                          geom_errorbar(aes(ymin = Percent_Survival - se, ymax = Percent_Survival + se), width = 0.2) +
+                                          geom_smooth(method = "loess", color = "grey20") +
+                                          geom_hline(yintercept = control_yint_HighEBV_D5, color = "grey50", linetype = "dashed", size = 1) +
+                                          # scale_color_manual(values=c("green4", "darkorange1", "purple"))+
+                                          theme(legend.position="right", legend.direction="vertical", 
+                                                legend.title = element_blank())+ theme_bw() + 
+                                          labs(title= "High EBV Day5",
+                                               x="Prime treatment",
+                                               y="Response")+ #scale_y_continuous(breaks=seq(0,100,20))+ 
+                                          ggtitle("Day 5") + 
+                                                theme(panel.grid.major = element_blank(), 
+                                                # axis.title.x = element_blank(),
+                                                panel.grid.minor = element_blank(), 
+                                                panel.background = element_blank(), 
+                                                axis.line = element_line(colour = "black"))+
+                                          theme_classic() +
+                                          facet_wrap(~Family_EBV)
+
+
+control_yint_LowEBV_D5        <- (SummaryStats.Treatment_EBV %>% dplyr::filter(c(Days == 5 & 
+                                                                                    Treatment %in% '0 day' &
+                                                                                      Family_EBV %in% 'Low')))$Percent_Survival
+LowEBVDay5_hormetic_curve_MeanSE <-  ggplot( (SummaryStats.Treatment_EBV %>% 
+                                              dplyr::filter(Days == 5 &
+                                                              Family_EBV %in% 'Low')), 
+                                    aes(x=as.numeric(substr(Treatment,1,1)),
+                                        y=Percent_Survival)) + 
+                                          geom_point() +
+                                          geom_errorbar(aes(ymin = Percent_Survival - se, ymax = Percent_Survival + se), width = 0.2) +
+                                          geom_smooth(method = "loess", color = "grey20") +
+                                          geom_hline(yintercept = control_yint_LowEBV_D5, color = "grey50", linetype = "dashed", size = 1) +
+                                          # scale_color_manual(values=c("green4", "darkorange1", "purple"))+
+                                          theme(legend.position="right", legend.direction="vertical", 
+                                                legend.title = element_blank())+ theme_bw() + 
+                                          labs(title= "lOW EBV Day5",
+                                               x="Prime treatment", 
+                                               y="Response")+ #scale_y_continuous(breaks=seq(0,100,20))+ 
+                                          ggtitle("Day 5") + 
+                                                theme(panel.grid.major = element_blank(), 
+                                                # axis.title.x = element_blank(),
+                                                panel.grid.minor = element_blank(), 
+                                                panel.background = element_blank(), 
+                                                axis.line = element_line(colour = "black"))+
+                                          theme_classic() +
+                                          facet_wrap(~Family_EBV)
+Day5_hormetic_curve <- ggpubr::ggarrange(HighEBVDay5_hormetic_curve_MeanSE,
+                                         LowEBVDay5_hormetic_curve_MeanSE,
+                                         nrow=2)
+
+
+
+
+
+
+# DAY 6 HORMETIC CURVE 
+
+
+control_yint_HighEBV_D6        <- (SummaryStats.Treatment_EBV %>% dplyr::filter(c(Days == 6 & 
+                                                                                    Treatment %in% '0 day' &
+                                                                                      Family_EBV %in% 'High')))$Percent_Survival
+HighEBVDay6_hormetic_curve_MeanSE <-  ggplot( (SummaryStats.Treatment_EBV %>% 
+                                              dplyr::filter(Days == 6 &
+                                                              Family_EBV %in% 'High')), 
+                                    aes(x=as.numeric(substr(Treatment,1,1)),
+                                        y=Percent_Survival)) + 
+                                          geom_point() +
+                                          geom_errorbar(aes(ymin = Percent_Survival - se, ymax = Percent_Survival + se), width = 0.2) +
+                                          geom_smooth(method = "loess", color = "grey20") +
+                                          geom_hline(yintercept = control_yint_HighEBV_D6, color = "grey50", linetype = "dashed", size = 1) +
+                                          # scale_color_manual(values=c("green4", "darkorange1", "purple"))+
+                                          theme(legend.position="right", legend.direction="vertical", 
+                                                legend.title = element_blank())+ theme_bw() + 
+                                          labs(title= "High EBV Day5",
+                                               x="Prime treatment",
+                                               y="Response")+ #scale_y_continuous(breaks=seq(0,100,20))+ 
+                                          ggtitle("Day 5") + 
+                                                theme(panel.grid.major = element_blank(), 
+                                                # axis.title.x = element_blank(),
+                                                panel.grid.minor = element_blank(), 
+                                                panel.background = element_blank(), 
+                                                axis.line = element_line(colour = "black"))+
+                                          theme_classic() +
+                                          facet_wrap(~Family_EBV)
+
+
+control_yint_LowEBV_D6        <- (SummaryStats.Treatment_EBV %>% dplyr::filter(c(Days == 6 & 
+                                                                                    Treatment %in% '0 day' &
+                                                                                      Family_EBV %in% 'Low')))$Percent_Survival
+LowEBVDay6_hormetic_curve_MeanSE <-  ggplot( (SummaryStats.Treatment_EBV %>% 
+                                              dplyr::filter(Days == 6 &
+                                                              Family_EBV %in% 'Low')), 
+                                    aes(x=as.numeric(substr(Treatment,1,1)),
+                                        y=Percent_Survival)) + 
+                                          geom_point() +
+                                          geom_errorbar(aes(ymin = Percent_Survival - se, ymax = Percent_Survival + se), width = 0.2) +
+                                          geom_smooth(method = "loess", color = "grey20") +
+                                          geom_hline(yintercept = control_yint_LowEBV_D6, color = "grey50", linetype = "dashed", size = 1) +
+                                          # scale_color_manual(values=c("green4", "darkorange1", "purple"))+
+                                          theme(legend.position="right", legend.direction="vertical", 
+                                                legend.title = element_blank())+ 
+                                          labs(title= "lOW EBV Day5",
+                                               x="Prime treatment", 
+                                               y="Response")+ #scale_y_continuous(breaks=seq(0,100,20))+ 
+                                          ggtitle("Day 5") + 
+                                                theme(panel.grid.major = element_blank(), 
+                                                # axis.title.x = element_blank(),
+                                                panel.grid.minor = element_blank(), 
+                                                panel.background = element_blank(), 
+                                                axis.line = element_line(colour = "black"))+
+                                          theme_classic() +
+                                          facet_wrap(~Family_EBV)
+
+
+
+Day6_hormetic_curve <- ggpubr::ggarrange(HighEBVDay6_hormetic_curve_MeanSE,
+                                         LowEBVDay6_hormetic_curve_MeanSE,
+                                         nrow=2)
+
+ggpubr::ggarrange(
+                  Day2_hormetic_curve,
+                  Day4_hormetic_curve,
+                  Day6_hormetic_curve,
+                  ncol = 3
+)
+
+# output curve 
+
+# pdf("../Output/Fall_2025/survival/survival_1weekrecovery_hormesis.pdf", width=8, height=5)
+# print(hormetic_curve_wk1_MeanSE)
+# dev.off()
+```
+
+* 1 week receovery statistics
+```{r hormetic curve statistics}
+
+# omit 6 hours to focus on 24 and 72 vs control
+df_1week_complete_OMIT <- df_1week_complete %>%  filter(!Prime_treatment %in% c('0_hours','6_hours'))
+
+# 1 day post challenge  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+ANOVA_day1 <- aov(
+                  lm(Percent_Survival ~ Prime_treatment, data = (df_1week_complete %>% dplyr::filter(Date %in% 20251011)) )
+                 )
+shapiro.test(resid(ANOVA_day1)) # 0.09153
+leveneTest(ANOVA_day1) # 0.5948
+summary(ANOVA_day1) # NS 0.594
+BINOM_day1 <- glm((Percent_Survival/100) ~ Prime_treatment, data = (df_1week_complete %>% dplyr::filter(Date %in% 20251011)), family = binomial)
+summary(BINOM_day1)
+#                          Estimate Std. Error z value Pr(>|z|)
+# (Intercept)                 4.615      5.860   0.788    0.431
+# Prime_treatment6_hours     -1.139      6.767  -0.168    0.866
+# Prime_treatment24_hours    -1.533      6.503  -0.236    0.814
+# Prime_treatment72_hours    16.951  16877.357   0.001    0.999
+
+
+ANOVA_day1_OM <- aov(
+                  lm(Percent_Survival ~ Prime_treatment, data = (df_1week_complete_OMIT %>% dplyr::filter(Date %in% 20251011)) )
+                 )
+shapiro.test(resid(ANOVA_day1_OM)) # 0.0582
+leveneTest(ANOVA_day1_OM) # 0.4971
+summary(ANOVA_day1_OM) # NS 0.497
+BINOM_day1_OM <- glm((Percent_Survival/100) ~ Prime_treatment, data = (df_1week_complete_OMIT %>% dplyr::filter(Date %in% 20251011)), family = binomial)
+summary(BINOM_day1_OM)
+#                          Estimate Std. Error z value Pr(>|z|)
+# (Intercept)                 4.615      5.860   0.788    0.431
+# Prime_treatment24_hours    -1.533      6.503  -0.236    0.814
+# Prime_treatment72_hours    16.951  16877.357   0.001    0.999
+
+
+
+# 2 days post challenge  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+ANOVA_day2 <- aov(
+                  lm(Percent_Survival ~ Prime_treatment, data = (df_1week_complete %>% 
+                                                                   dplyr::filter(Date %in% 20251012))
+                 ) )
+shapiro.test(resid(ANOVA_day2)) # 0.2183
+leveneTest(ANOVA_day2) # 0.7549
+summary(ANOVA_day2) # NS 0.0671 .
+BINOM_day2 <- glm((Percent_Survival/100) ~ Prime_treatment, data = (df_1week_complete %>% dplyr::filter(Date %in% 20251012)), family = binomial)
+summary(BINOM_day2)
+#                         Estimate Std. Error z value Pr(>|z|)
+# (Intercept)               0.1572     1.1583   0.136    0.892
+# Prime_treatment6_hours   -0.2744     1.6369  -0.168    0.867
+# Prime_treatment24_hours  -0.9681     1.7048  -0.568    0.570
+# Prime_treatment72_hours   0.4257     1.6708   0.255    0.799
+
+
+ANOVA_day2_OM <- aov(
+                  lm(Percent_Survival ~ Prime_treatment, data = (df_1week_complete_OMIT %>% 
+                                                                   dplyr::filter(Date %in% 20251012))
+                 ) )
+shapiro.test(resid(ANOVA_day2_OM)) # 0.3713
+leveneTest(ANOVA_day2_OM) # 0.6862
+summary(ANOVA_day2_OM) # NS 0.0671 .
+BINOM_day2_OM <- glm((Percent_Survival/100) ~ Prime_treatment, data = (df_1week_complete_OMIT %>% dplyr::filter(Date %in% 20251012)), family = binomial)
+summary(BINOM_day2_OM)
+#                         Estimate Std. Error z value Pr(>|z|)
+# (Intercept)               0.1572     1.1583   0.136    0.892
+# Prime_treatment24_hours  -0.9681     1.7048  -0.568    0.570
+# Prime_treatment72_hours   0.4257     1.6708   0.255    0.799
+
+
+# 3 days post challenge :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+ANOVA_day3<- aov(
+                  lm(Percent_Survival ~ Prime_treatment, data = (df_1week_complete %>% 
+                                                                   dplyr::filter(Date %in% 20251013)))
+                 )
+shapiro.test(resid(ANOVA_day3)) # 0.08861
+leveneTest(ANOVA_day3) # 0.8307
+summary(ANOVA_day3) # NS
+BINOM_day3 <- glm((Percent_Survival/100) ~ Prime_treatment, data = (df_1week_complete %>% dplyr::filter(Date %in% 20251013)), family = binomial)
+summary(BINOM_day3)
+#                         Estimate Std. Error z value Pr(>|z|)
+# (Intercept)             -1.41099    1.45418  -0.970    0.332
+# Prime_treatment6_hours   0.06873    2.03575   0.034    0.973
+# Prime_treatment24_hours -0.48641    2.24814  -0.216    0.829
+# Prime_treatment72_hours  0.54688    1.92685   0.284    0.777
+
+ANOVA_day3_OM <- aov(
+                  lm(Percent_Survival ~ Prime_treatment, data = (df_1week_complete_OMIT %>% 
+                                                                   dplyr::filter(Date %in% 20251013)))
+                 )
+shapiro.test(resid(ANOVA_day3_OM)) # 0.6386
+leveneTest(ANOVA_day3_OM) # 0.3577
+summary(ANOVA_day3_OM) # 0.0152 
+BINOM_day3 <- glm((Percent_Survival/100) ~ Prime_treatment, data = (df_1week_complete_OMIT %>% dplyr::filter(Date %in% 20251013)), family = binomial)
+summary(BINOM_day3)
+#                         Estimate Std. Error z value Pr(>|z|)
+# (Intercept)             -1.41099    1.45418  -0.970    0.332
+# Prime_treatment6_hours   0.06873    2.03575   0.034    0.973
+# Prime_treatment24_hours -0.48641    2.24814  -0.216    0.829
+# Prime_treatment72_hours  0.54688    1.92685   0.284    0.777
+
+
+
+# 4 days post challenge  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+ANOVA_day4<- aov(
+                  lm(Percent_Survival ~ Prime_treatment, data = (df_1week_complete %>% 
+                                                                   dplyr::filter(Date %in% 20251014)))
+                 )
+shapiro.test(resid(ANOVA_day4)) # 0.09939
+leveneTest(ANOVA_day4) # 0.6327
+summary(ANOVA_day4) # 0.0947 .
+BINOM_day4 <- glm((Percent_Survival/100) ~ Prime_treatment, data = (df_1week_complete %>% dplyr::filter(Date %in% 20251014)), family = binomial)
+summary(BINOM_day4)
+#                           Estimate Std. Error z value Pr(>|z|)
+# (Intercept)                -3.9120     4.1641  -0.939    0.347
+# Prime_treatment6_hours    -18.6540 27826.0561  -0.001    0.999
+# Prime_treatment24_hours     0.6856     5.1397   0.133    0.894
+# Prime_treatment72_hours     1.4097     4.7015   0.300    0.764
+
+ANOVA_day4_OM <- aov(
+                  lm(Percent_Survival ~ Prime_treatment, data = (df_1week_complete_OMIT %>% 
+                                                                   dplyr::filter(Date %in% 20251014)))
+                 )
+shapiro.test(resid(ANOVA_day4_OM)) # 0.03605
+summary(ANOVA_day4_OM)
+KM_day4_OM <- kruskal.test(Percent_Survival ~ Prime_treatment, data = (df_1week_complete_OMIT %>% 
+                                                                   dplyr::filter(Date %in% 20251014)))
+KM_day4_OM # 0.3029
+BINOM_day4 <- glm((Percent_Survival/100) ~ Prime_treatment, data = (df_1week_complete_OMIT %>% dplyr::filter(Date %in% 20251014)), family = binomial)
+summary(BINOM_day4)
+#                         Estimate Std. Error z value Pr(>|z|)
+# (Intercept)              -3.9120     4.1638  -0.940    0.347
+# Prime_treatment24_hours   0.6856     5.1394   0.133    0.894
+# Prime_treatment72_hours   1.4097     4.7012   0.300    0.764
+```
+
+### Test data, Kaplan Meier
+
+#### About:
+
+* We will use the {ggsurvfit} package to generate Kaplan-Meier plots. This package aims to ease plotting of time-to-event endpoints using the power of the {ggplot2} package. See http://www.danieldsjoberg.com/ggsurvfit/index.html for details.
+
+#### Build 'surv' object for statistical analysis 
+
+* useful links [https://www.emilyzabor.com/tutorials/survival_analysis_in_r_tutorial.html#Comparing_survival_times_between_groups]
+
+* What the hell does a surv object mean?? 
+  
+  - a 'surv' object reads ALL events as that of a dead (1) or alive (0) individual
+  
+  - but but but... we have volumetric count data of live and dead! Does this not throw a wrench into this type of analysis? 
+  
+    - Nope! Below we use logic to create a GIGANTIC table formatted correctly for this purpose!
+
+### Test data, plot Kapla Meier
+
+```{r 1 week plot Kaplan Meier}
+
+km_fit <- survfit2(Surv(Days_Alive, Status) ~ Treatment, data = df_raw)
+
+km_fit_LowEBV <- survfit2(Surv(Days_Alive, Status) ~ Treatment, data = (df_raw %>% filter(Family_num > 35)))
+km_fit_HighEBV <- survfit2(Surv(Days_Alive, Status) ~ Treatment, data = (df_raw %>% filter(Family_num < 35)))
+
+
+KaplanMeier.plot <- km_fit_LowEBV %>% 
+                        ggsurvfit(linetype_aes = F, linewidth = 1,type ="survival") +
+                        scale_color_manual(values = c("darkgreen","orange","darkorange2","darkred")) +
+                        scale_fill_manual(values = c("darkgreen","orange","darkorange2","darkred")) +
+                        labs(
+                          x = "Days",
+                          y = "Overall survival probability"
+                        ) +
+                        add_confidence_interval() +
+                        # add_risktable() +
+                        # add_risktable_strata_symbol() + # (symbol = "\U25CF", size = 10
+                        scale_ggsurvfit(x_scales = list(breaks = 0:10)) +
+                        add_pvalue(location  = "annotation", x = 3.5)
+
+km_fit <- survfit(Surv(Days_Alive, Status) ~ Treatment + Family, data = df_raw)
+
+ggsurvplot_facet(
+  km_fit,
+  data         = df_raw,
+  facet.by     = "Family",
+  color        = "Family",
+  pval         = TRUE,
+  conf.int     = TRUE,
+  legend.title = "Family"
+)
+
+KM_hormetic_curves <- ggpubr::ggarrange(KaplanMeier.plot,
+                                            hormetic_curve_MeanSE,
+                                            ncol=1,
+                                            nrow = 2)
+
+
+# plot the surv data
+pdf("../Output/Fall_2025/survival/survival_1weekrecovery_KaplanMeier.pdf", width=6, height = 8)
+KM_hormetic_curves
+dev.off()
+
+# output curve 
+
+pdf("../Output/Fall_2025/survival/survival_1weekrecovery_hormesis.pdf", width=8, height=5)
+print(hormetic_curve_MeanSE)
+dev.off()
+
+
+fit <- coxph(Surv(Days_Alive, Status) ~ Treatment, data =  df_raw)
+summary(fit)
+hr <- broom::tidy(fit, exponentiate = TRUE, conf.int = TRUE)
+
+ggplot(hr, aes(x = estimate, y = term)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+  geom_vline(xintercept = 1, linetype = 2) +
+  scale_x_log10() +
+  theme_classic() +
+  labs(x = "Hazard ratio", y = NULL)
+
+```
+
+
+```{r 3 weeks plot Kaplan Meier}
+
+km_fit <- survfit2(Surv(Days, event) ~ Prime_treatment, data = (df_surv_3wk_expanded %>%  dplyr::filter(!Days >5)))
+
+
+KaplanMeier.plot <- km_fit %>% 
+                        ggsurvfit(linetype_aes = F, linewidth = 1,type ="survival") +
+                        scale_color_manual(values = c("darkgreen","orange","darkorange2","darkred")) +
+                        scale_fill_manual(values = c("darkgreen","orange","darkorange2","darkred")) +
+                        labs(
+                          x = "Days",
+                          y = "Overall survival probability"
+                        ) + 
+                        add_confidence_interval() +
+                        # add_risktable() +
+                        # add_risktable_strata_symbol() + # (symbol = "\U25CF", size = 10
+                        scale_ggsurvfit(x_scales = list(breaks = 0:10)) +
+                        add_pvalue(location  = "annotation", x = 3.5)
+
+
+KM_hormetic_curves <- ggpubr::ggarrange(KaplanMeier.plot,
+                                            hormetic_curve_3wks_MeanSE,
+                                            ncol=1,
+                                            nrow = 2)
+
+
+# plot the surv data
+pdf("../Output/Fall_2025/survival/survival_3weeksrecovery_KaplanMeier.pdf", width=6, height = 8)
+KM_hormetic_curves
+dev.off()
+
+# output curve 
+
+pdf("../Output/Fall_2025/survival/survival_3weeksrecovery_hormesis.pdf", width=8, height=5)
+print(hormetic_curve_MeanSE)
+dev.off()
+
+
+fit <- coxph(Surv(Days, event) ~ Prime_treatment, data =  (df_surv_3wk_expanded %>%  dplyr::filter(!Days >5)))
+summary(fit)
+hr <- broom::tidy(fit, exponentiate = TRUE, conf.int = TRUE)
+
+ggplot(hr, aes(x = estimate, y = term)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+  geom_vline(xintercept = 1, linetype = 2) +
+  scale_x_log10() +
+  theme_classic() +
+  labs(x = "Hazard ratio", y = NULL)
+
+```

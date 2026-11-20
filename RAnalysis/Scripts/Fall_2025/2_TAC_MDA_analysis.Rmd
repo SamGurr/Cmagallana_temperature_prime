@@ -1,0 +1,291 @@
+---
+title: "MDA_TAC_analysis"
+author: "Samuel Gurr"
+date: "2026-09-04"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# SET WORKING DIRECTORY 
+knitr::opts_knit$set(root.dir = "C:/Users/gurrs/Documents/6_Github_repositories/SamGurr/Cgigas_temperature_prime/RAnalysis") # Sam's
+# knitr::opts_knit$set(root.dir = "C:/ < Anna add here > /Predictive_phenomics/RAnalysis") # Anna's root dir on her computer
+```
+
+
+```{r load libraries}
+library(ggplot2)
+library(dplyr)
+```
+
+```{r load data}
+
+TAC_calculated <- read.csv("Output/Fall_2025/assays/TAC_calculated_means.csv") # means file is the mean gtwn duplicates per indiv
+MDA_calculated <- read.csv("Output/Fall_2025/assays/MDA_calculated_means.csv") # means file is the mean gtwn duplicates per indiv
+
+TAC_calculated.all <- read.csv("Output/Fall_2025/assays/TAC_calculated_all.csv") # means file is the mean gtwn duplicates per indiv
+MDA_calculated.all <- read.csv("Output/Fall_2025/assays/MDA_calculated_all.csv") # means file is the mean gtwn duplicates per indiv
+
+```
+
+
+# PLOTS 
+
+```{r plot TAC  and MDA}
+# relevel the treatment factors for the main plot 
+MDA_calculated$Timepoint <- factor(MDA_calculated$Timepoint, 
+                                                       levels = c("post-prime", 
+                                                                  "1 week recovery, post challenge", 
+                                                                  "3 weeks recovery, post challenge"))
+
+MDA_calculated$Prime_treatment <- factor(MDA_calculated$Prime_treatment, 
+                                                       levels = c("0_hours", 
+                                                                  "24_hours", 
+                                                                  "72_hours"))
+
+
+TAC_calculated$Timepoint <- factor(TAC_calculated$Timepoint, 
+                                                       levels = c("post-prime", 
+                                                                  "1 week recovery, post challenge", 
+                                                                  "3 weeks recovery, post challenge"))
+
+TAC_calculated$Prime_treatment <- factor(TAC_calculated$Prime_treatment, 
+                                                       levels = c("0_hours", 
+                                                                  "24_hours", 
+                                                                  "72_hours"))
+
+# plot
+MDA_TAC_plot.all <- ggpubr::ggarrange(
+                      ggplot(TAC_calculated.all,
+                              aes(x = as.factor(Oyster_ID), 
+                               y = mM_CRE_permgProtein)) + 
+                        geom_point(),
+                      
+                      ggplot(MDA_calculated.all,
+                              aes(x = as.factor(Oyster_ID), 
+                               y = mM_MDA_permgProtein)) + 
+                        geom_point(),
+                      nrow=2)
+
+MDA_calculated.OM <- MDA_calculated %>%  dplyr::filter(!mM_MDA_permgProtein.mean >0.6)
+TAC_calculated.OM <- TAC_calculated %>%  dplyr::filter(!mM_CRE_permgProtein.mean >12)
+
+
+MDA_TAC_plot <- ggpubr::ggarrange(
+  
+        ggplot(data = (TAC_calculated.OM %>% dplyr::filter(!mM_CRE_permgProtein.mean < 0)), 
+                                         aes(x=Prime_treatment, 
+                                             y = mM_CRE_permgProtein.mean, 
+                                              group =  Timepoint,
+                                              shape = Prime_treatment,
+                                              color = Prime_treatment)) +
+                                          stat_summary(
+                                            fun = mean,
+                                            geom = "point",
+                                            size = 3
+                                          ) +
+                                          stat_summary(
+                                            fun.data = mean_se,
+                                            geom = "errorbar",
+                                            width = 0.2
+                                          ) +
+                                          scale_color_manual(values = c("#D55E00", "#E69F00", "#009E73")) +
+                                          labs(
+                                             x = "Sublethal prime (duration under 33C)",
+                                             y = "mM CRE mg protien-1",
+                                             title = "Total antioxidant capacity"
+                                           )  +
+                                          facet_wrap(~Timepoint, nrow = 1
+                                                     )+#, strip.position = "right") +
+                                          theme_classic() +
+                                          theme(legend.position = "none"),# +
+                                          #coord_flip(),
+      ggplot(data = MDA_calculated.OM, 
+                                         aes(x=Prime_treatment, 
+                                             y = mM_MDA_permgProtein.mean, 
+                                              group =  Timepoint,
+                                              shape = Prime_treatment,
+                                              color = Prime_treatment)) +
+                                          stat_summary(
+                                            fun = mean,
+                                            geom = "point",
+                                            size = 3
+                                          ) +
+                                          stat_summary(
+                                            fun.data = mean_se,
+                                            geom = "errorbar",
+                                            width = 0.2
+                                          ) +
+                                          scale_color_manual(values = c("#D55E00", "#E69F00", "#009E73")) +
+                                          labs(
+                                             x = "Sublethal prime (duration under 33C)",
+                                             y = "mM MDA mg protein-1",
+                                             title = "Lipid peroxidation"
+                                           )  +
+                                          facet_wrap(~Timepoint, nrow = 1)+#, strip.position = "right") +
+                                          theme_classic() +
+                                          theme(legend.position = "none"), #+
+                                          #coord_flip(),
+       
+      
+    
+nrow =2)
+ 
+
+pdf("Output/Fall_2025/assays/TAC_MDA_plot.pdf", width = 10, height = 8)
+plot(MDA_TAC_plot)
+dev.off()
+```
+
+
+```{r TAC stats}
+
+# ANOVA post prime :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+ANOVA.TACprime <- aov(
+                      lm(
+                        mM_CRE_permgProtein.mean ~ Prime_treatment,
+                         data = (TAC_calculated.OM %>%  dplyr::filter(Timepoint %in% 'post-prime'))
+                      )
+                    )
+shapiro.test(resid(ANOVA.TACprime)) # 0.5764 - normal
+car::leveneTest(ANOVA.TACprime) # 0.7076 - homogeneity variance
+
+summary(ANOVA.TACprime)
+#                 Df Sum Sq Mean Sq F value Pr(>F)  
+# Prime_treatment  2  12.99   6.494   10.62 0.0107 * SIGNIFICANT EFFECT
+# Residuals        6   3.67   0.612  
+TukeyHSD(ANOVA.TACprime)
+# $Prime_treatment
+#                         diff        lwr        upr     p adj
+# 24_hours-0_hours  -2.7381787 -4.5708421 -0.9055154 0.0089359
+# 72_hours-0_hours  -0.8792858 -2.9573307  1.1987592 0.4461819
+# 72_hours-24_hours  1.8588929 -0.3315587  4.0493446 0.0894486
+
+
+
+# ANOVA after lethal challenge (1 week recovery after primed) ::::::::::::::::::::::::::::
+ANOVA.TAC1week <- aov(
+                      lm(
+                        mM_CRE_permgProtein.mean ~ Prime_treatment,
+                         data = (TAC_calculated.OM %>%  dplyr::filter(Timepoint %in% '1 week recovery, post challenge'))
+                      )
+                    )
+shapiro.test(resid(ANOVA.TAC1week)) # 0.7303 - normal
+car::leveneTest(ANOVA.TAC1week) # 0.4039 - homogeneity variance
+
+summary(ANOVA.TAC1week)
+#                 Df Sum Sq Mean Sq F value Pr(>F)  
+# Prime_treatment  2  29.39   14.70   3.983  0.063 . MARGINAL EFFECT
+# Residuals        8  29.52    3.69  
+
+
+
+
+# ANOVA after lethal challenge (3 weeks recovery after primed) ::::::::::::::::::::::::::::
+ANOVA.TAC3weeks <- aov(
+                      lm(
+                        mM_CRE_permgProtein.mean ~ Prime_treatment,
+                         data = (TAC_calculated.OM %>%  dplyr::filter(Timepoint %in% '3 weeks recovery, post challenge'))
+                      )
+                    )
+shapiro.test(resid(ANOVA.TAC3weeks)) # 0.09657 - normal
+car::leveneTest(ANOVA.TAC3weeks) # 0.7121 - homogeneity variance
+summary(ANOVA.TAC3weeks)
+#                 Df Sum Sq Mean Sq F value Pr(>F)
+# Prime_treatment  2  1.618  0.8089     0.4  0.683
+# Residuals        8 16.167  2.0208  
+
+```
+
+```{r MDA stats}
+
+# ANOVA post prime :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+ANOVA.MDAprime <- aov(
+                      lm(
+                        mM_MDA_permgProtein.mean ~ Prime_treatment,
+                         data = (MDA_calculated.OM %>%  dplyr::filter(Timepoint %in% 'post-prime'))
+                      )
+                    )
+shapiro.test(resid(ANOVA.MDAprime)) # 0.9934 - normal
+car::leveneTest(ANOVA.MDAprime) # 0.1573 - homogeneity variance
+summary(ANOVA.MDAprime)
+#                 Df   Sum Sq   Mean Sq F value Pr(>F)
+# Prime_treatment  2 0.000232 0.0001158   0.115  0.894
+# Residuals        6 0.006054 0.0010090 
+
+
+
+
+# ANOVA after lethal challenge (1 week recovery after primed) ::::::::::::::::::::::::::::
+ANOVA.MDA1week <- aov(
+                      lm(
+                        mM_MDA_permgProtein.mean ~ Prime_treatment,
+                         data = (MDA_calculated.OM %>%  dplyr::filter(Timepoint %in% '1 week recovery, post challenge'))
+                      )
+                    )
+shapiro.test(resid(ANOVA.MDA1week)) # 0.4122 - non normal
+car::leveneTest(ANOVA.MDA1week) # 0.6627 - homogeneity variance
+summary(ANOVA.MDA1week)
+#                 Df  Sum Sq Mean Sq F value Pr(>F)  
+# Prime_treatment  2 0.02706 0.01353   5.263 0.0478 * SIGNIFICANT EFFECT
+# Residuals        6 0.01542 0.00257 
+TukeyHSD(ANOVA.MDA1week)
+# $Prime_treatment
+#                          diff          lwr        upr     p adj
+# 24_hours-0_hours   0.13690537 -0.005095238 0.27890598 0.0572940
+# 72_hours-0_hours   0.03681948 -0.097894127 0.17153309 0.6948564
+# 72_hours-24_hours -0.10008589 -0.218892125 0.01872034 0.0916376
+
+
+
+# ANOVA after lethal challenge (3 weeks recovery after primed) ::::::::::::::::::::::::::::
+ANOVA.MDA3weeks <- aov(
+                      lm(
+                        mM_MDA_permgProtein.mean ~ Prime_treatment,
+                         data = (MDA_calculated.OM %>%  dplyr::filter(Timepoint %in% '3 weeks recovery, post challenge'))
+                      )
+                    )
+shapiro.test(resid(ANOVA.MDA3weeks)) # 0.2585 - normal
+car::leveneTest(ANOVA.MDA3weeks) # 0.3492 - homogeneity variance
+summary(ANOVA.MDA3weeks)
+#                 Df  Sum Sq  Mean Sq F value Pr(>F)
+# Prime_treatment  2 0.00643 0.003214   0.498  0.625
+# Residuals        8 0.05162 0.006452 
+
+
+```
+
+
+```{r posthoc tests}
+
+# TAC prime effect
+ANOVA.TACprime.TUKEY <- TukeyHSD(ANOVA.TACprime)
+ANOVA.TACprime.TUKEY.emm <- emmeans::emmeans(ANOVA.TACprime, ~ Prime_treatment)
+multcomp::cld(ANOVA.TACprime.TUKEY.emm, adjust = "tukey", Letters = letters)
+#                         diff        lwr       upr     p adj
+# 24_hours-72_hours -1.8588929 -4.0493446 0.3315587 0.0894486
+# 0_hours-72_hours   0.8792858 -1.1987592 2.9573307 0.4461819
+# 0_hours-24_hours   2.7381787  0.9055154 4.5708421 0.0089359
+
+# Prime_treatment emmean    SE df lower.CL upper.CL .group
+# 24_hours          6.94 0.452  6     5.46     8.42  a    
+# 72_hours          8.80 0.553  6     6.99    10.61  ab   
+# 0_hours           9.68 0.391  6     8.40    10.96   b  
+
+
+# MDA chalelnge effect after 1 week recovery post prime
+ANOVA.MDA1week.TUKEY <- TukeyHSD(ANOVA.MDA1week)
+ANOVA.MDA1week.TUKEY.emm <- emmeans::emmeans(ANOVA.MDA1week, ~ Prime_treatment)
+multcomp::cld(ANOVA.MDA1week.TUKEY.emm, adjust = "tukey", Letters = letters)
+#                          diff         lwr         upr     p adj
+# 24_hours-72_hours  0.10008589 -0.01872034 0.218892125 0.0916376
+# 0_hours-72_hours  -0.03681948 -0.17153309 0.097894127 0.6948564
+# 0_hours-24_hours  -0.13690537 -0.27890598 0.005095238 0.0572940
+
+# Prime_treatment emmean     SE df lower.CL upper.CL .group
+# 0_hours          0.111 0.0358  6 -0.00658    0.228  a    
+# 72_hours         0.148 0.0253  6  0.06461    0.231  a    
+# 24_hours         0.248 0.0293  6  0.15186    0.344  a  
+
+```
