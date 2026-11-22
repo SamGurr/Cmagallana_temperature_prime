@@ -1,0 +1,8 @@
+8136007 reads; of these:
+  8136007 (100.00%) were unpaired; of these:
+    5648970 (69.43%) aligned 0 times
+    2381231 (29.27%) aligned exactly 1 time
+    105806 (1.30%) aligned >1 times
+30.57% overall alignment rate
+[bam_sort_core] merging from 0 files and 8 in-memory blocks...
+[2026-11-09T22:32:13.236] error: *** JOB 7260080 ON cedar0 CANCELLED AT 2026-11-09T22:32:13 DUE to SIGNAL Terminated ***

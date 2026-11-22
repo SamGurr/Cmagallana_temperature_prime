@@ -1,0 +1,15 @@
+8209139 reads; of these:
+  8209139 (100.00%) were unpaired; of these:
+    5797647 (70.62%) aligned 0 times
+    2308192 (28.12%) aligned exactly 1 time
+    103300 (1.26%) aligned >1 times
+29.38% overall alignment rate
+[bam_sort_core] merging from 0 files and 8 in-memory blocks...
+8695072 reads; of these:
+  8695072 (100.00%) were unpaired; of these:
+    6088741 (70.03%) aligned 0 times
+    2507245 (28.84%) aligned exactly 1 time
+    99086 (1.14%) aligned >1 times
+29.97% overall alignment rate
+[bam_sort_core] merging from 0 files and 8 in-memory blocks...
+[2026-11-08T23:26:06.722] error: *** JOB 7230093 ON elm1 CANCELLED AT 2026-11-08T23:26:06 DUE to SIGNAL Terminated ***
